@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api/v1";
-
-type RolePage = "hr" | "student" | "admin";
 
 type HrOverview = {
   role: string;
@@ -28,6 +27,44 @@ type AdminOverview = {
   };
 };
 
+type AdminRecordSummary = {
+  reference_no: string;
+  status: string;
+  original_filename: string;
+  content_type: string;
+  storage_backend: string;
+  storage_key: string;
+  object_size: number | null;
+  object_etag: string;
+  parsed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  skills: string[];
+  roles: string[];
+  years_experience: number | null;
+  ai_cache_keys: string[];
+};
+
+type AdminRecordListResponse = {
+  count: number;
+  results: AdminRecordSummary[];
+};
+
+type AdminRecordDetailResponse = {
+  reference_no: string;
+  status: string;
+  original_filename: string;
+  content_type: string;
+  storage_backend: string;
+  storage_key: string;
+  object_size: number | null;
+  object_etag: string;
+  parsed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  parsed_json: Record<string, unknown>;
+};
+
 type CandidateScore = {
   reference_no: string;
   score_normalized: number;
@@ -37,17 +74,55 @@ type CandidateScore = {
   missing_skills: string[];
 };
 
-type StudentPayload = {
-  recommendations: Array<{ role_path: string; confidence: number }>;
-  skill_gaps: string[];
-  courses: Array<{ title: string; provider: string; duration: string; level: string; url: string }>;
+type HrAiAnalysis = {
+  status: string;
+  reference_no: string;
+  ai_analysis: {
+    job_roles?: string[];
+  };
+  provider?: string;
+  model?: string;
+  cache_hit?: boolean;
+};
+
+type HrSuitabilityResponse = {
+  status: string;
+  reference_no: string;
+  comparison?: {
+    fit_score: number;
+    fit_threshold_passed: boolean;
+    experience_threshold_passed: boolean;
+    decision: "PASS" | "NOT_PASS";
+    is_resume_suitable: boolean;
+  };
+  ai_evaluation?: {
+    strengths?: string[];
+    gaps?: string[];
+    recommendations?: string[];
+    reasoning?: string;
+  };
+  evaluation_input?: {
+    role_name?: string;
+    required_skills?: string[];
+    min_fit_score?: number;
+    required_experience_years?: number | null;
+  };
+  provider?: string;
+  model?: string;
+  cache_hit?: boolean;
 };
 
 type ParsePayload = {
   reference_no: string;
   structured_profile: {
     skills: string[];
+    roles: string[];
     years_experience: number | null;
+    job_relevant_skills?: {
+      matched: string[];
+      missing: string[];
+      role_requirements: Record<string, string[]>;
+    };
   };
   parse_meta: {
     storage_backend: string;
@@ -55,18 +130,117 @@ type ParsePayload = {
   };
 };
 
+type AiRoleAnalysisPayload = {
+  status: string;
+  reference_no: string;
+  ai_analysis: {
+    job_roles: string[];
+  };
+  provider?: string;
+  model?: string;
+  cache_hit?: boolean;
+};
+
+type RoleSkillView = {
+  role: string;
+  matched_skills: string[];
+  missing_skills: string[];
+  score_normalized: number;
+};
+
+type CareerRecommendationPayload = {
+  recommendations?: {
+    skill_roadmap?: Record<string, string[]>;
+    timeline?: string;
+  };
+  cache_hit?: boolean;
+};
+
 function toPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
-function App() {
-  const [page, setPage] = useState<RolePage>("hr");
+async function uploadAndParseResume(file: File) {
+  const contentType = file.type || (file.name.toLowerCase().endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/pdf");
 
-  const [hrOverview, setHrOverview] = useState<HrOverview | null>(null);
-  const [studentOverview, setStudentOverview] = useState<StudentOverview | null>(null);
-  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
-  const [overviewError, setOverviewError] = useState("");
+  const presignedRes = await fetch(`${API_BASE_URL}/resumes/upload-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, content_type: contentType }),
+  });
 
+  if (presignedRes.ok) {
+    const pre = (await presignedRes.json()) as {
+      reference_no: string;
+      upload_url: string;
+      s3_key: string;
+    };
+
+    const putRes = await fetch(pre.upload_url, {
+      method: "PUT",
+      body: file,
+    });
+    if (!putRes.ok) {
+      throw new Error(`S3 upload failed (${putRes.status})`);
+    }
+
+    const registerRes = await fetch(`${API_BASE_URL}/resumes/register-upload`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        reference_no: pre.reference_no,
+        s3_key: pre.s3_key,
+        filename: file.name,
+        content_type: contentType,
+        auto_parse: true,
+      }),
+    });
+
+    if (!registerRes.ok) {
+      const text = await registerRes.text();
+      throw new Error(`register failed (${registerRes.status}) ${text}`);
+    }
+
+    const registered = (await registerRes.json()) as { reference_no: string; parsed_json?: ParsePayload };
+    return {
+      reference_no: registered.reference_no,
+      parsed_json: registered.parsed_json,
+      transport: "s3",
+    };
+  }
+
+  const uploadForm = new FormData();
+  uploadForm.append("resume", file);
+  const directUploadRes = await fetch(`${API_BASE_URL}/resumes/upload`, {
+    method: "POST",
+    body: uploadForm,
+  });
+
+  if (!directUploadRes.ok) {
+    const text = await directUploadRes.text();
+    throw new Error(`upload failed (${directUploadRes.status}) ${text}`);
+  }
+
+  const uploaded = (await directUploadRes.json()) as { reference_no: string };
+  const parseRes = await fetch(`${API_BASE_URL}/resumes/${uploaded.reference_no}/parse`, { method: "POST" });
+  if (!parseRes.ok) {
+    const text = await parseRes.text();
+    throw new Error(`parse failed (${parseRes.status}) ${text}`);
+  }
+
+  return {
+    reference_no: uploaded.reference_no,
+    parsed_json: (await parseRes.json()) as ParsePayload,
+    transport: "local",
+  };
+}
+
+function HrPage(props: {
+  hrOverview: HrOverview | null;
+  loading: boolean;
+  setLoading: (value: boolean) => void;
+}) {
+  const { hrOverview, loading, setLoading } = props;
   const [referenceNo, setReferenceNo] = useState("REF-001");
   const [candidateScore, setCandidateScore] = useState<CandidateScore | null>(null);
   const [scoreError, setScoreError] = useState("");
@@ -74,46 +248,19 @@ function App() {
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState("");
   const [uploadError, setUploadError] = useState("");
-  const [lastReferenceNo, setLastReferenceNo] = useState("");
   const [parsePayload, setParsePayload] = useState<ParsePayload | null>(null);
+  const [lastReferenceNo, setLastReferenceNo] = useState("");
+  const [hrAiAnalysis, setHrAiAnalysis] = useState<HrAiAnalysis | null>(null);
+  const [suitabilityResult, setSuitabilityResult] = useState<HrSuitabilityResponse | null>(null);
+  const [suitabilityError, setSuitabilityError] = useState("");
 
-  const [studentUserId, setStudentUserId] = useState("student-demo-001");
-  const [studentPayload, setStudentPayload] = useState<StudentPayload | null>(null);
-  const [studentError, setStudentError] = useState("");
-
-  const [adminValidationText, setAdminValidationText] = useState("This profile has no private contact details.");
-  const [adminValidationResult, setAdminValidationResult] = useState("");
-
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const loadOverviews = async () => {
-      setOverviewError("");
-      try {
-        const [hrRes, studentRes, adminRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/hr`),
-          fetch(`${API_BASE_URL}/student`),
-          fetch(`${API_BASE_URL}/admin`),
-        ]);
-        if (!hrRes.ok || !studentRes.ok || !adminRes.ok) {
-          throw new Error("overview endpoints unavailable");
-        }
-
-        const hrData = (await hrRes.json()) as HrOverview;
-        const studentData = (await studentRes.json()) as StudentOverview;
-        const adminData = (await adminRes.json()) as AdminOverview;
-
-        setHrOverview(hrData);
-        setStudentOverview(studentData);
-        setAdminOverview(adminData);
-        setStudentUserId(studentData.default_user || "student-demo-001");
-      } catch {
-        setOverviewError("Failed to load role pages from backend endpoints.");
-      }
-    };
-
-    void loadOverviews();
-  }, []);
+  const [jobRole, setJobRole] = useState("Backend Engineer");
+  const [mustHaveSkills, setMustHaveSkills] = useState("Python,Django,REST,SQL");
+  const [techStack, setTechStack] = useState("Python,Django,PostgreSQL,Docker");
+  const [niceToHaveSkills, setNiceToHaveSkills] = useState("Kubernetes,CI/CD,AWS");
+  const [requiredExperienceYears, setRequiredExperienceYears] = useState("2");
+  const [minFitScore, setMinFitScore] = useState("70");
+  const [otherParams, setOtherParams] = useState("Strong API design, deployment familiarity, ownership mindset");
 
   const fetchScore = async () => {
     setLoading(true);
@@ -132,62 +279,23 @@ function App() {
     }
   };
 
-  const uploadResume = async () => {
+  const handleUploadAndParse = async () => {
     if (!resumeFile) {
-      setUploadError("Select a PDF file first.");
+      setUploadError("Select a PDF or DOCX file first.");
       return;
     }
 
     setLoading(true);
     setUploadError("");
     setUploadStatus("");
-
+    setParsePayload(null);
     try {
-      const presignedRes = await fetch(`${API_BASE_URL}/resumes/upload-url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: resumeFile.name, content_type: resumeFile.type || "application/pdf" }),
-      });
-
-      if (presignedRes.ok) {
-        const pre = (await presignedRes.json()) as {
-          reference_no: string;
-          upload_url: string;
-          s3_key: string;
-        };
-
-        const putRes = await fetch(pre.upload_url, {
-          method: "PUT",
-          body: resumeFile,
-        });
-
-        if (!putRes.ok) {
-          throw new Error(`S3 upload failed (${putRes.status})`);
-        }
-
-        const registerRes = await fetch(`${API_BASE_URL}/resumes/register-upload`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            reference_no: pre.reference_no,
-            s3_key: pre.s3_key,
-            filename: resumeFile.name,
-            content_type: resumeFile.type || "application/pdf",
-          }),
-        });
-
-        if (!registerRes.ok) {
-          const registerError = await registerRes.text();
-          throw new Error(`register failed (${registerRes.status}) ${registerError}`);
-        }
-
-        setLastReferenceNo(pre.reference_no);
-        setUploadStatus(`Uploaded to S3 with key: ${pre.s3_key}`);
-        return;
+      const result = await uploadAndParseResume(resumeFile);
+      setUploadStatus(`Uploaded and parsed (${result.transport}). Reference: ${result.reference_no}`);
+      setLastReferenceNo(result.reference_no);
+      if (result.parsed_json) {
+        setParsePayload(result.parsed_json);
       }
-
-      const preError = await presignedRes.text();
-      throw new Error(`upload-url failed (${presignedRes.status}) ${preError}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Upload failed.";
       setUploadError(message);
@@ -196,38 +304,510 @@ function App() {
     }
   };
 
-  const parseResume = async () => {
-    if (!lastReferenceNo.trim()) {
-      setUploadError("Upload a resume first to get a reference number.");
+  const runHrAiAnalysis = async () => {
+    const ref = (lastReferenceNo || referenceNo).trim();
+    if (!ref) {
+      setSuitabilityError("Provide a reference number or upload a resume first.");
       return;
     }
 
     setLoading(true);
+    setSuitabilityError("");
+    setHrAiAnalysis(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/resumes/${lastReferenceNo}/parse`, { method: "POST" });
+      const res = await fetch(`${API_BASE_URL}/candidates/${ref}/ai-analysis`);
       if (!res.ok) {
-        throw new Error("parse failed");
+        const text = await res.text();
+        throw new Error(`AI analysis failed (${res.status}) ${text}`);
       }
-      setParsePayload((await res.json()) as ParsePayload);
-    } catch {
-      setUploadError("Parse failed for the uploaded reference.");
+      setHrAiAnalysis((await res.json()) as HrAiAnalysis);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "AI analysis failed.";
+      setSuitabilityError(message);
     } finally {
       setLoading(false);
     }
   };
 
-  const loadStudent = async () => {
+  const evaluateSuitability = async () => {
+    const ref = (lastReferenceNo || referenceNo).trim();
+    if (!ref) {
+      setSuitabilityError("Provide a reference number or upload a resume first.");
+      return;
+    }
+
     setLoading(true);
-    setStudentError("");
+    setSuitabilityError("");
+    setSuitabilityResult(null);
     try {
-      const res = await fetch(`${API_BASE_URL}/students/${studentUserId.trim()}/recommendations`);
+      const res = await fetch(`${API_BASE_URL}/candidates/${ref}/ai-evaluation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role_name: jobRole,
+          must_have_skills: mustHaveSkills,
+          tech_stack: techStack,
+          nice_to_have_skills: niceToHaveSkills,
+          required_experience_years: requiredExperienceYears ? Number(requiredExperienceYears) : null,
+          min_fit_score: minFitScore ? Number(minFitScore) : 70,
+          other_parameters: otherParams,
+        }),
+      });
       if (!res.ok) {
-        throw new Error("student endpoint failed");
+        const text = await res.text();
+        throw new Error(`Suitability check failed (${res.status}) ${text}`);
       }
-      setStudentPayload((await res.json()) as StudentPayload);
-    } catch {
-      setStudentError("Failed to load student recommendations from backend.");
-      setStudentPayload(null);
+      setSuitabilityResult((await res.json()) as HrSuitabilityResponse);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Suitability check failed.";
+      setSuitabilityError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>{hrOverview?.title || "HR Talent Dashboard"}</h2>
+      <p>{hrOverview?.description}</p>
+
+      <div className="card-grid">
+        <article className="card">
+          <h3>Candidate Scoring</h3>
+          <input value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} placeholder="REF-001" />
+          <button onClick={fetchScore} type="button" disabled={loading}>
+            Fetch Score
+          </button>
+          {scoreError && <p className="error">{scoreError}</p>}
+          {candidateScore && (
+            <div className="result">
+              <p>
+                <strong>{candidateScore.reference_no}</strong> - {toPercent(candidateScore.score_normalized)} (bucket {candidateScore.score_bucket})
+              </p>
+              <p>{candidateScore.explanation}</p>
+              <p>Missing: {candidateScore.missing_skills.join(", ") || "None"}</p>
+            </div>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Resume Upload + Parse</h3>
+          <input type="file" accept=".pdf,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] || null)} />
+          <button onClick={handleUploadAndParse} type="button" disabled={loading}>
+            Upload and Parse
+          </button>
+          {uploadStatus && <p className="ok">{uploadStatus}</p>}
+          {uploadError && <p className="error">{uploadError}</p>}
+          {parsePayload && (
+            <div className="result">
+              <p>
+                Skills: <strong>{parsePayload.structured_profile.skills.join(", ") || "None"}</strong>
+              </p>
+              <p>
+                Storage: {parsePayload.parse_meta.storage_backend} ({parsePayload.parse_meta.storage_key})
+              </p>
+            </div>
+          )}
+        </article>
+      </div>
+
+      <div className="card-grid">
+        <article className="card">
+          <h3>AI Analysis (HR View)</h3>
+          <button type="button" onClick={runHrAiAnalysis} disabled={loading}>
+            Get AI Analysis for Candidate
+          </button>
+          {hrAiAnalysis && (
+            <div className="result">
+              <p>
+                <strong>Suggested roles:</strong> {(hrAiAnalysis.ai_analysis.job_roles || []).join(", ") || "None"}
+              </p>
+              <p className="meta">
+                Provider: {hrAiAnalysis.provider || "unknown"} | Model: {hrAiAnalysis.model || "unknown"}
+              </p>
+            </div>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Job Suitability Parameters</h3>
+          <label htmlFor="jobRole">Job role</label>
+          <input id="jobRole" value={jobRole} onChange={(e) => setJobRole(e.target.value)} />
+
+          <label htmlFor="mustHave">Must-have skills (comma separated)</label>
+          <input id="mustHave" value={mustHaveSkills} onChange={(e) => setMustHaveSkills(e.target.value)} />
+
+          <label htmlFor="techStack">Tech stack (comma separated)</label>
+          <input id="techStack" value={techStack} onChange={(e) => setTechStack(e.target.value)} />
+
+          <label htmlFor="niceToHave">Nice-to-have skills (comma separated)</label>
+          <input id="niceToHave" value={niceToHaveSkills} onChange={(e) => setNiceToHaveSkills(e.target.value)} />
+
+          <label htmlFor="requiredExp">Required experience years</label>
+          <input id="requiredExp" value={requiredExperienceYears} onChange={(e) => setRequiredExperienceYears(e.target.value)} />
+
+          <label htmlFor="minScore">Minimum fit score (0-100)</label>
+          <input id="minScore" value={minFitScore} onChange={(e) => setMinFitScore(e.target.value)} />
+
+          <label htmlFor="otherParams">Other parameters</label>
+          <textarea id="otherParams" value={otherParams} onChange={(e) => setOtherParams(e.target.value)} />
+
+          <button type="button" onClick={evaluateSuitability} disabled={loading}>
+            Compare Resume JSONB and Evaluate
+          </button>
+        </article>
+      </div>
+
+      {suitabilityError && <p className="error">{suitabilityError}</p>}
+
+      {suitabilityResult && (
+        <div className="card">
+          <h3>Suitability Decision</h3>
+          <div className="result">
+            <p>
+              <strong>Decision:</strong> {suitabilityResult.comparison?.decision || "UNKNOWN"}
+            </p>
+            <p>
+              <strong>Resume suitable:</strong> {suitabilityResult.comparison?.is_resume_suitable ? "Yes" : "No"}
+            </p>
+            <p>
+              <strong>Fit score:</strong> {suitabilityResult.comparison?.fit_score ?? 0} / threshold {suitabilityResult.evaluation_input?.min_fit_score ?? 70}
+            </p>
+            <p>
+              <strong>Fit threshold passed:</strong> {suitabilityResult.comparison?.fit_threshold_passed ? "Yes" : "No"}
+            </p>
+            <p>
+              <strong>Experience threshold passed:</strong> {suitabilityResult.comparison?.experience_threshold_passed ? "Yes" : "No"}
+            </p>
+
+            {!!suitabilityResult.ai_evaluation?.strengths?.length && (
+              <>
+                <h4>Strengths</h4>
+                <ul>
+                  {suitabilityResult.ai_evaluation.strengths.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {!!suitabilityResult.ai_evaluation?.gaps?.length && (
+              <>
+                <h4>Gaps</h4>
+                <ul>
+                  {suitabilityResult.ai_evaluation.gaps.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            {!!suitabilityResult.ai_evaluation?.recommendations?.length && (
+              <>
+                <h4>Recommendations</h4>
+                <ul>
+                  {suitabilityResult.ai_evaluation.recommendations.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+
+            <p className="meta">
+              Provider: {suitabilityResult.provider || "unknown"} | Model: {suitabilityResult.model || "unknown"}
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StudentPage(props: {
+  studentOverview: StudentOverview | null;
+  loading: boolean;
+  setLoading: (value: boolean) => void;
+}) {
+  const { studentOverview, loading, setLoading } = props;
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [referenceNo, setReferenceNo] = useState("");
+  const [parsePayload, setParsePayload] = useState<ParsePayload | null>(null);
+  const [roleAnalysis, setRoleAnalysis] = useState<AiRoleAnalysisPayload | null>(null);
+  const [roleSkills, setRoleSkills] = useState<RoleSkillView[]>([]);
+  const [careerPlan, setCareerPlan] = useState<CareerRecommendationPayload | null>(null);
+
+  const uniqueMissingSkills = useMemo(() => {
+    const bag = new Set<string>();
+    roleSkills.forEach((r) => r.missing_skills.forEach((s) => bag.add(s)));
+    return [...bag];
+  }, [roleSkills]);
+
+  const runAiPathAnalysis = async (ref: string) => {
+    const analysisRes = await fetch(`${API_BASE_URL}/candidates/${ref}/ai-analysis`);
+    if (!analysisRes.ok) {
+      throw new Error("ai-analysis failed");
+    }
+    const analysis = (await analysisRes.json()) as AiRoleAnalysisPayload;
+    const roles = analysis.ai_analysis?.job_roles || [];
+
+    const roleScoreViews = await Promise.all(
+      roles.slice(0, 5).map(async (role) => {
+        const scoreRes = await fetch(`${API_BASE_URL}/candidates/${ref}/score?role=${encodeURIComponent(role)}`);
+        if (!scoreRes.ok) {
+          return {
+            role,
+            matched_skills: [],
+            missing_skills: [],
+            score_normalized: 0,
+          } as RoleSkillView;
+        }
+        const payload = (await scoreRes.json()) as CandidateScore;
+        return {
+          role,
+          matched_skills: payload.matched_skills || [],
+          missing_skills: payload.missing_skills || [],
+          score_normalized: payload.score_normalized || 0,
+        } as RoleSkillView;
+      }),
+    );
+
+    const recommendationRes = await fetch(`${API_BASE_URL}/candidates/${ref}/career-recommendations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_roles: roles }),
+    });
+
+    const recommendations = recommendationRes.ok
+      ? ((await recommendationRes.json()) as CareerRecommendationPayload)
+      : null;
+
+    setRoleAnalysis(analysis);
+    setRoleSkills(roleScoreViews);
+    setCareerPlan(recommendations);
+  };
+
+  const handleUploadAndAnalyze = async () => {
+    if (!resumeFile) {
+      setUploadError("Select a PDF or DOCX file first.");
+      return;
+    }
+
+    setLoading(true);
+    setUploadError("");
+    setUploadStatus("");
+    setRoleAnalysis(null);
+    setRoleSkills([]);
+    setCareerPlan(null);
+    try {
+      const result = await uploadAndParseResume(resumeFile);
+      setReferenceNo(result.reference_no);
+      setParsePayload(result.parsed_json || null);
+      await runAiPathAnalysis(result.reference_no);
+      setUploadStatus(`Student resume analyzed. Reference: ${result.reference_no}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Student analysis failed.";
+      setUploadError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <section className="panel">
+      <h2>{studentOverview?.title || "Student Career Page"}</h2>
+      <p>{studentOverview?.description || "Upload your resume and get AI-driven role paths, growth roadmap, and missing-skill guidance."}</p>
+
+      <div className="card-grid">
+        <article className="card">
+          <h3>Student Resume Upload</h3>
+          <input type="file" accept=".pdf,.docx" onChange={(e) => setResumeFile(e.target.files?.[0] || null)} />
+          <button type="button" onClick={handleUploadAndAnalyze} disabled={loading}>
+            Upload and Get Path Analysis
+          </button>
+          {uploadStatus && <p className="ok">{uploadStatus}</p>}
+          {uploadError && <p className="error">{uploadError}</p>}
+          {referenceNo && <p className="meta">Reference: {referenceNo}</p>}
+          {parsePayload && (
+            <div className="result">
+              <p>
+                Current skills: <strong>{parsePayload.structured_profile.skills.join(", ") || "None"}</strong>
+              </p>
+            </div>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>AI Role Paths</h3>
+          {!roleAnalysis && <p className="meta">No AI path analysis yet.</p>}
+          {roleAnalysis && (
+            <div className="result">
+              <ul>
+                {roleAnalysis.ai_analysis.job_roles.map((role) => (
+                  <li key={role}>{role}</li>
+                ))}
+              </ul>
+              <p className="meta">
+                Provider: {roleAnalysis.provider || "unknown"} | Model: {roleAnalysis.model || "unknown"}
+              </p>
+            </div>
+          )}
+        </article>
+      </div>
+
+      <div className="card-grid">
+        <article className="card">
+          <h3>Missing Skills by Path</h3>
+          {!roleSkills.length && <p className="meta">Upload and analyze resume to see missing skills.</p>}
+          {!!roleSkills.length && (
+            <div className="result">
+              <div className="path-grid">
+                {roleSkills.map((roleView) => (
+                  <div key={roleView.role} className="path-card">
+                    <p>
+                      <strong>{roleView.role}</strong> - Fit {toPercent(roleView.score_normalized)}
+                    </p>
+                    <p>Missing: {roleView.missing_skills.join(", ") || "None"}</p>
+                    <p>Matched: {roleView.matched_skills.join(", ") || "None"}</p>
+                  </div>
+                ))}
+              </div>
+              <p>
+                <strong>Priority skill gaps:</strong> {uniqueMissingSkills.join(", ") || "None"}
+              </p>
+            </div>
+          )}
+        </article>
+
+        <article className="card">
+          <h3>Growth Roadmap</h3>
+          {!careerPlan?.recommendations && <p className="meta">No roadmap available yet.</p>}
+          {careerPlan?.recommendations && (
+            <div className="result">
+              {Object.entries(careerPlan.recommendations.skill_roadmap || {}).map(([phase, items]) => (
+                <div key={phase} className="roadmap-line">
+                  <p>
+                    <strong>{phase}</strong>: {(items || []).join(", ")}
+                  </p>
+                </div>
+              ))}
+              <p>
+                <strong>Estimated growth timeline:</strong> {careerPlan.recommendations.timeline || "Not available"}
+              </p>
+            </div>
+          )}
+        </article>
+      </div>
+    </section>
+  );
+}
+
+function AdminPage(props: {
+  adminOverview: AdminOverview | null;
+  loading: boolean;
+  setLoading: (value: boolean) => void;
+}) {
+  const { adminOverview, loading, setLoading } = props;
+  const [adminValidationText, setAdminValidationText] = useState("This profile has no private contact details.");
+  const [adminValidationResult, setAdminValidationResult] = useState("");
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminToken, setAdminToken] = useState(localStorage.getItem("gethired_admin_access_token") || "");
+  const [adminLoginError, setAdminLoginError] = useState("");
+  const [recordsPayload, setRecordsPayload] = useState<AdminRecordListResponse | null>(null);
+  const [selectedRef, setSelectedRef] = useState("");
+  const [recordDetail, setRecordDetail] = useState<AdminRecordDetailResponse | null>(null);
+  const [recordsError, setRecordsError] = useState("");
+
+  const authHeaders: Record<string, string> = adminToken
+    ? { Authorization: `Bearer ${adminToken}` }
+    : {};
+
+  const loginAdmin = async () => {
+    setLoading(true);
+    setAdminLoginError("");
+    try {
+      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/token/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: adminUsername, password: adminPassword }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Admin login failed (${res.status}) ${text}`);
+      }
+
+      const payload = (await res.json()) as { access: string; refresh: string };
+      localStorage.setItem("gethired_admin_access_token", payload.access);
+      setAdminToken(payload.access);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Admin login failed.";
+      setAdminLoginError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const logoutAdmin = () => {
+    localStorage.removeItem("gethired_admin_access_token");
+    setAdminToken("");
+    setRecordsPayload(null);
+    setRecordDetail(null);
+    setSelectedRef("");
+  };
+
+  const loadAllRecords = async () => {
+    if (!adminToken) {
+      setRecordsError("Login as admin first.");
+      return;
+    }
+    setLoading(true);
+    setRecordsError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/records`, {
+        headers: { ...authHeaders },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Load records failed (${res.status}) ${text}`);
+      }
+      setRecordsPayload((await res.json()) as AdminRecordListResponse);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load admin records.";
+      setRecordsError(message);
+      setRecordsPayload(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadRecordDetail = async (referenceNo: string) => {
+    if (!adminToken) {
+      setRecordsError("Login as admin first.");
+      return;
+    }
+    if (!referenceNo.trim()) {
+      setRecordsError("Select or enter a reference number.");
+      return;
+    }
+
+    setLoading(true);
+    setRecordsError("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/admin/records/${referenceNo.trim()}`, {
+        headers: { ...authHeaders },
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Load record detail failed (${res.status}) ${text}`);
+      }
+      setRecordDetail((await res.json()) as AdminRecordDetailResponse);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load record detail.";
+      setRecordsError(message);
+      setRecordDetail(null);
     } finally {
       setLoading(false);
     }
@@ -257,132 +837,166 @@ function App() {
   };
 
   return (
-    <div className="shell">
-      <header className="masthead">
-        <p className="tag">GetHired v2</p>
-        <h1>Role-Specific Portal</h1>
-        <p>Three dedicated pages powered by individual backend endpoints for HR, Student, and Admin.</p>
-      </header>
+    <section className="panel">
+      <h2>{adminOverview?.title || "Admin Governance Page"}</h2>
+      <p>{adminOverview?.description}</p>
 
-      <nav className="role-nav" aria-label="role navigation">
-        <button className={page === "hr" ? "active" : ""} onClick={() => setPage("hr")} type="button">
-          HR Page
-        </button>
-        <button className={page === "student" ? "active" : ""} onClick={() => setPage("student")} type="button">
-          Student Page
-        </button>
-        <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">
-          Admin Page
-        </button>
-      </nav>
+      <div className="card-grid">
+        <article className="card">
+          <h3>Admin Login (Superuser)</h3>
+          <label htmlFor="adminUsername">Username</label>
+          <input id="adminUsername" value={adminUsername} onChange={(e) => setAdminUsername(e.target.value)} />
+          <label htmlFor="adminPassword">Password</label>
+          <input id="adminPassword" type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
+          <button type="button" onClick={loginAdmin} disabled={loading}>
+            Login
+          </button>
+          <button type="button" onClick={logoutAdmin} disabled={loading || !adminToken}>
+            Logout
+          </button>
+          {adminToken && <p className="ok">Admin authenticated.</p>}
+          {adminLoginError && <p className="error">{adminLoginError}</p>}
+        </article>
 
-      {overviewError && <p className="error">{overviewError}</p>}
+        <article className="card">
+          <h3>Parsed Records Explorer</h3>
+          <button type="button" onClick={loadAllRecords} disabled={loading || !adminToken}>
+            Load All Parsed Records
+          </button>
+          <label htmlFor="selectedRef">Reference number</label>
+          <input id="selectedRef" value={selectedRef} onChange={(e) => setSelectedRef(e.target.value)} placeholder="REF-XXXXXXXX" />
+          <button type="button" onClick={() => void loadRecordDetail(selectedRef)} disabled={loading || !adminToken}>
+            Load Full Record Detail
+          </button>
+          {recordsError && <p className="error">{recordsError}</p>}
+          {recordsPayload && (
+            <div className="result">
+              <p>
+                <strong>Total records:</strong> {recordsPayload.count}
+              </p>
+              <ul>
+                {recordsPayload.results.slice(0, 30).map((item) => (
+                  <li key={item.reference_no}>
+                    <button type="button" className="inline-link" onClick={() => {
+                      setSelectedRef(item.reference_no);
+                      void loadRecordDetail(item.reference_no);
+                    }}>
+                      {item.reference_no}
+                    </button>
+                    {` | ${item.status} | roles: ${(item.roles || []).join(", ") || "None"} | skills: ${(item.skills || []).length}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </article>
+      </div>
 
-      {page === "hr" && (
-        <section className="panel">
-          <h2>{hrOverview?.title || "HR Talent Dashboard"}</h2>
-          <p>{hrOverview?.description}</p>
-
-          <div className="card-grid">
-            <article className="card">
-              <h3>Candidate Scoring</h3>
-              <input value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} placeholder="REF-001" />
-              <button onClick={fetchScore} type="button" disabled={loading}>
-                Fetch Score
-              </button>
-              {scoreError && <p className="error">{scoreError}</p>}
-              {candidateScore && (
-                <div className="result">
-                  <p>
-                    <strong>{candidateScore.reference_no}</strong> - {toPercent(candidateScore.score_normalized)} (bucket {candidateScore.score_bucket})
-                  </p>
-                  <p>{candidateScore.explanation}</p>
-                </div>
-              )}
-            </article>
-
-            <article className="card">
-              <h3>Resume Upload</h3>
-              <input type="file" accept=".pdf" onChange={(e) => setResumeFile(e.target.files?.[0] || null)} />
-              <button onClick={uploadResume} type="button" disabled={loading}>
-                Upload Resume
-              </button>
-              <button onClick={parseResume} type="button" disabled={loading || !lastReferenceNo}>
-                Parse Uploaded Resume
-              </button>
-              {uploadStatus && <p className="ok">{uploadStatus}</p>}
-              {uploadError && <p className="error">{uploadError}</p>}
-              {lastReferenceNo && <p className="meta">Reference: {lastReferenceNo}</p>}
-              {parsePayload && (
-                <div className="result">
-                  <p>
-                    Skills: <strong>{parsePayload.structured_profile.skills.join(", ") || "None"}</strong>
-                  </p>
-                  <p>
-                    Storage: {parsePayload.parse_meta.storage_backend} ({parsePayload.parse_meta.storage_key})
-                  </p>
-                </div>
-              )}
-            </article>
+      {recordDetail && (
+        <article className="card">
+          <h3>Full Parsed JSONB + AI Cache</h3>
+          <div className="result">
+            <p>
+              <strong>Reference:</strong> {recordDetail.reference_no}
+            </p>
+            <p>
+              <strong>File:</strong> {recordDetail.original_filename} ({recordDetail.content_type})
+            </p>
+            <p>
+              <strong>Status:</strong> {recordDetail.status}
+            </p>
+            <pre className="json-view">{JSON.stringify(recordDetail.parsed_json, null, 2)}</pre>
           </div>
-        </section>
+        </article>
       )}
 
-      {page === "student" && (
-        <section className="panel">
-          <h2>{studentOverview?.title || "Student Career Page"}</h2>
-          <p>{studentOverview?.description}</p>
-          <div className="card">
-            <label htmlFor="studentId">Student id</label>
-            <input id="studentId" value={studentUserId} onChange={(e) => setStudentUserId(e.target.value)} />
-            <button type="button" onClick={loadStudent} disabled={loading}>
-              Load Recommendations
-            </button>
-            {studentError && <p className="error">{studentError}</p>}
-            {studentPayload && (
-              <div className="result">
-                <h3>Role Paths</h3>
-                <ul>
-                  {studentPayload.recommendations.map((r) => (
-                    <li key={r.role_path}>
-                      {r.role_path} - {toPercent(r.confidence)}
-                    </li>
-                  ))}
-                </ul>
-                <h3>Skill Gaps</h3>
-                <ul>
-                  {studentPayload.skill_gaps.map((g) => (
-                    <li key={g}>{g}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
+      <div className="card-grid">
+        <article className="card">
+          <h3>Governance Metrics</h3>
+          <p>Audit target: {adminOverview?.metrics.deanonymize_audit_target}</p>
+          <p>DIR threshold: {adminOverview?.metrics.fairness_dir_threshold}</p>
+        </article>
+        <article className="card">
+          <h3>PII Validation</h3>
+          <textarea value={adminValidationText} onChange={(e) => setAdminValidationText(e.target.value)} />
+          <button type="button" onClick={runAdminValidation} disabled={loading}>
+            Validate Privacy
+          </button>
+          {adminValidationResult && <p className="meta">{adminValidationResult}</p>}
+        </article>
+      </div>
+    </section>
+  );
+}
 
-      {page === "admin" && (
-        <section className="panel">
-          <h2>{adminOverview?.title || "Admin Governance Page"}</h2>
-          <p>{adminOverview?.description}</p>
-          <div className="card-grid">
-            <article className="card">
-              <h3>Governance Metrics</h3>
-              <p>Audit target: {adminOverview?.metrics.deanonymize_audit_target}</p>
-              <p>DIR threshold: {adminOverview?.metrics.fairness_dir_threshold}</p>
-            </article>
-            <article className="card">
-              <h3>PII Validation</h3>
-              <textarea value={adminValidationText} onChange={(e) => setAdminValidationText(e.target.value)} />
-              <button type="button" onClick={runAdminValidation} disabled={loading}>
-                Validate Privacy
-              </button>
-              {adminValidationResult && <p className="meta">{adminValidationResult}</p>}
-            </article>
-          </div>
-        </section>
-      )}
-    </div>
+function App() {
+
+  const [hrOverview, setHrOverview] = useState<HrOverview | null>(null);
+  const [studentOverview, setStudentOverview] = useState<StudentOverview | null>(null);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [overviewError, setOverviewError] = useState("");
+
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const loadOverviews = async () => {
+      setOverviewError("");
+      try {
+        const [hrRes, studentRes, adminRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/hr`),
+          fetch(`${API_BASE_URL}/student`),
+          fetch(`${API_BASE_URL}/admin`),
+        ]);
+        if (!hrRes.ok || !studentRes.ok || !adminRes.ok) {
+          throw new Error("overview endpoints unavailable");
+        }
+
+        const hrData = (await hrRes.json()) as HrOverview;
+        const studentData = (await studentRes.json()) as StudentOverview;
+        const adminData = (await adminRes.json()) as AdminOverview;
+
+        setHrOverview(hrData);
+        setStudentOverview(studentData);
+        setAdminOverview(adminData);
+      } catch {
+        setOverviewError("Failed to load role pages from backend endpoints.");
+      }
+    };
+
+    void loadOverviews();
+  }, []);
+
+  return (
+    <BrowserRouter>
+      <div className="shell">
+        <header className="masthead">
+          <p className="tag">GetHired v2</p>
+          <h1>Role-Specific Portal</h1>
+          <p>Three dedicated frontend pages with AI-backed candidate and student growth analysis.</p>
+        </header>
+
+        <nav className="role-nav" aria-label="role navigation">
+          <NavLink className={({ isActive }) => `route-link${isActive ? " active" : ""}`} to="/hr">
+            HR Page
+          </NavLink>
+          <NavLink className={({ isActive }) => `route-link${isActive ? " active" : ""}`} to="/student">
+            Student Page
+          </NavLink>
+          <NavLink className={({ isActive }) => `route-link${isActive ? " active" : ""}`} to="/admin">
+            Admin Page
+          </NavLink>
+        </nav>
+
+        {overviewError && <p className="error">{overviewError}</p>}
+
+        <Routes>
+          <Route path="/" element={<Navigate to="/hr" replace />} />
+          <Route path="/hr" element={<HrPage hrOverview={hrOverview} loading={loading} setLoading={setLoading} />} />
+          <Route path="/student" element={<StudentPage studentOverview={studentOverview} loading={loading} setLoading={setLoading} />} />
+          <Route path="/admin" element={<AdminPage adminOverview={adminOverview} loading={loading} setLoading={setLoading} />} />
+        </Routes>
+      </div>
+    </BrowserRouter>
   );
 }
 

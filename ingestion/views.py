@@ -23,11 +23,16 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     PdfReader = None
 
+try:
+    from docx import Document as DocxDocument
+except ImportError:  # pragma: no cover - optional dependency
+    DocxDocument = None
+
 
 UPLOAD_STORE: dict[str, dict] = {}
 PARSE_STORE: dict[str, dict] = {}
 
-SUPPORTED_EXTENSIONS = ('.pdf',)
+SUPPORTED_EXTENSIONS = ('.pdf', '.docx')
 DEFAULT_SKILLS = [
     'Python',
     'Django',
@@ -137,6 +142,13 @@ def _valid_resume_filename(filename: str) -> bool:
     return bool(filename) and filename.lower().endswith(SUPPORTED_EXTENSIONS)
 
 
+def _unsupported_file_detail(filename: str) -> str:
+    lowered = (filename or '').lower()
+    if lowered.endswith('.doc'):
+        return 'Unsupported file type. Legacy .doc is not supported; please convert it to .docx and upload again.'
+    return 'Unsupported file type. Only PDF and DOCX are accepted.'
+
+
 def _extract_text(content: bytes) -> str:
     def _repair_unicode(value: str) -> str:
         repaired = value.replace('\u00a0', ' ')
@@ -186,6 +198,24 @@ def _extract_text(content: bytes) -> str:
             reader = PdfReader(BytesIO(content))
             pages = [page.extract_text() or '' for page in reader.pages]
             extracted = _normalize('\n'.join(pages).strip())
+            if extracted:
+                return extracted
+        except Exception:
+            pass
+
+    # DOCX files are zip containers (PK header). Parse paragraph/cell text when available.
+    if content.startswith(b'PK') and DocxDocument is not None:
+        try:
+            document = DocxDocument(BytesIO(content))
+            lines: list[str] = []
+            lines.extend([p.text for p in document.paragraphs if p.text and p.text.strip()])
+            for table in document.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        if cell_text:
+                            lines.append(cell_text)
+            extracted = _normalize('\n'.join(lines).strip())
             if extracted:
                 return extracted
         except Exception:
@@ -538,7 +568,7 @@ class ResumeUploadView(APIView):
         filename = uploaded.name or ''
         if not _valid_resume_filename(filename):
             return Response(
-                {'detail': 'Unsupported file type. Only PDF is accepted.'},
+                {'detail': _unsupported_file_detail(filename)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -592,7 +622,7 @@ class ResumeUploadUrlView(APIView):
 
         if not _valid_resume_filename(filename):
             return Response(
-                {'detail': 'Unsupported file type. Only PDF is accepted.'},
+                {'detail': _unsupported_file_detail(filename)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -656,7 +686,7 @@ class ResumeRegisterUploadView(APIView):
 
         if not _valid_resume_filename(filename):
             return Response(
-                {'detail': 'Unsupported file type. Only PDF is accepted.'},
+                {'detail': _unsupported_file_detail(filename)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

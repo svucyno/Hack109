@@ -82,6 +82,14 @@ def _set_cached_result(record: ResumeUploadRecord, key: str, fingerprint: str, r
     record.save(update_fields=['parsed_json', 'updated_at'])
 
 
+def _parse_csv_list(raw_value) -> list[str]:
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    if not raw_value:
+        return []
+    return [part.strip() for part in str(raw_value).split(',') if part.strip()]
+
+
 class GeminiStatusView(APIView):
     """Check if AI providers are enabled and ready."""
     permission_classes = [AllowAny]
@@ -140,13 +148,41 @@ class CandidateAIEvaluationView(APIView):
         extracted_skills = parsed_profile.get('skills', [])
         roles = parsed_profile.get('roles', [])
 
-        job_description = str(request.data.get('job_description', '')).strip()
-        required_skills = request.data.get('required_skills', [])
+        role_name = str(request.data.get('role_name', '')).strip()
+        experience_required = request.data.get('required_experience_years')
+        try:
+            required_experience_years = int(experience_required) if experience_required is not None else None
+        except (TypeError, ValueError):
+            required_experience_years = None
+
+        must_have_skills = _parse_csv_list(request.data.get('must_have_skills'))
+        nice_to_have_skills = _parse_csv_list(request.data.get('nice_to_have_skills'))
+        tech_stack = _parse_csv_list(request.data.get('tech_stack'))
+        additional_parameters = str(request.data.get('other_parameters', '')).strip()
+
+        required_skills = _parse_csv_list(request.data.get('required_skills'))
+        if not required_skills:
+            required_skills = list(dict.fromkeys(must_have_skills + tech_stack))
         if not required_skills:
             required_skills = extracted_skills[:5]
 
+        min_fit_score = request.data.get('min_fit_score', 70)
+        try:
+            min_fit_score = int(min_fit_score)
+        except (TypeError, ValueError):
+            min_fit_score = 70
+
+        job_description = str(request.data.get('job_description', '')).strip()
         if not job_description:
-            job_description = f"Candidate for roles: {', '.join(roles)}"
+            fragments = [
+                f"Role: {role_name or 'General Software Role'}",
+                f"Must-have skills: {', '.join(must_have_skills) if must_have_skills else 'Not specified'}",
+                f"Tech stack: {', '.join(tech_stack) if tech_stack else 'Not specified'}",
+                f"Nice-to-have skills: {', '.join(nice_to_have_skills) if nice_to_have_skills else 'Not specified'}",
+                f"Required experience (years): {required_experience_years if required_experience_years is not None else 'Not specified'}",
+                f"Other parameters: {additional_parameters or 'Not specified'}",
+            ]
+            job_description = '\n'.join(fragments)
 
         fingerprint = _profile_fingerprint(record)
         key = _cache_key(
@@ -154,6 +190,13 @@ class CandidateAIEvaluationView(APIView):
             {
                 'job_description': job_description,
                 'required_skills': sorted(str(skill) for skill in required_skills),
+                'role_name': role_name,
+                'required_experience_years': required_experience_years,
+                'must_have_skills': sorted(must_have_skills),
+                'nice_to_have_skills': sorted(nice_to_have_skills),
+                'tech_stack': sorted(tech_stack),
+                'other_parameters': additional_parameters,
+                'min_fit_score': min_fit_score,
             },
         )
         cached = _get_cached_result(record, key, fingerprint)
@@ -167,6 +210,49 @@ class CandidateAIEvaluationView(APIView):
             job_description=job_description,
             required_skills=required_skills,
         )
+
+        if result.get('status') == 'success':
+            fit_score = (((result.get('ai_evaluation') or {}).get('fit_score')) if isinstance(result.get('ai_evaluation'), dict) else None)
+            try:
+                fit_score = int(fit_score)
+            except (TypeError, ValueError):
+                fit_score = 0
+
+            pass_decision = fit_score >= min_fit_score
+            profile_years = parsed_profile.get('years_experience')
+            experience_pass = True
+            if required_experience_years is not None and isinstance(profile_years, int):
+                experience_pass = profile_years >= required_experience_years
+            elif required_experience_years is not None and profile_years is None:
+                experience_pass = False
+
+            final_pass = pass_decision and experience_pass
+
+            result = {
+                **result,
+                'evaluation_input': {
+                    'role_name': role_name,
+                    'must_have_skills': must_have_skills,
+                    'nice_to_have_skills': nice_to_have_skills,
+                    'tech_stack': tech_stack,
+                    'required_skills': required_skills,
+                    'required_experience_years': required_experience_years,
+                    'min_fit_score': min_fit_score,
+                    'other_parameters': additional_parameters,
+                },
+                'resume_profile_snapshot': {
+                    'skills': extracted_skills,
+                    'roles': roles,
+                    'years_experience': parsed_profile.get('years_experience'),
+                },
+                'comparison': {
+                    'fit_score': fit_score,
+                    'fit_threshold_passed': pass_decision,
+                    'experience_threshold_passed': experience_pass,
+                    'decision': 'PASS' if final_pass else 'NOT_PASS',
+                    'is_resume_suitable': final_pass,
+                },
+            }
 
         if result.get('status') == 'success':
             _set_cached_result(record, key, fingerprint, result)

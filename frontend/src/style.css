@@ -72,18 +72,27 @@ body {
   gap: 10px;
 }
 
-.role-nav button {
+.role-nav .route-link {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 11px 14px;
   font-family: "Manrope", sans-serif;
   font-weight: 700;
-  cursor: pointer;
   color: var(--ink);
   background: rgba(255, 255, 255, 0.7);
+  text-align: center;
+  text-decoration: none;
 }
 
-.role-nav button.active {
+.role-nav .route-link:hover,
+.role-nav .route-link:focus-visible {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(120deg, #123b55, #0d5c63);
+  outline: none;
+}
+
+.role-nav .route-link.active {
   color: #fff;
   border-color: transparent;
   background: linear-gradient(120deg, #123b55, #0d5c63);
@@ -198,9 +207,58 @@ button {
   font-size: 0.95rem;
 }
 
+.path-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.path-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+}
+
+.path-card p {
+  margin: 4px 0;
+}
+
+.roadmap-line p {
+  margin: 6px 0;
+}
+
+.inline-link {
+  width: auto;
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #0d5c63;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.json-view {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 380px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #0f1720;
+  color: #d7f3ff;
+  font-size: 0.84rem;
+}
+
 @media (max-width: 920px) {
   .role-nav,
-  .card-grid {
+  .card-grid,
+  .path-grid {
     grid-template-columns: 1fr;
   }
 }

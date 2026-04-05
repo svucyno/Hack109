@@ -1,6 +1,12 @@
 from django.urls import path
 
-from .api_views import AdminOverviewView, HrOverviewView, StudentOverviewView
+from .api_views import (
+    AdminOverviewView,
+    HrOverviewView,
+    StudentOverviewView,
+    AdminResumeRecordsView,
+    AdminResumeRecordDetailView,
+)
 from .ai_views import (
     GeminiStatusView,
     CandidateAIEvaluationView,
@@ -12,6 +18,8 @@ urlpatterns = [
     path('hr', HrOverviewView.as_view(), name='hr-overview'),
     path('student', StudentOverviewView.as_view(), name='student-overview'),
     path('admin', AdminOverviewView.as_view(), name='admin-overview'),
+    path('admin/records', AdminResumeRecordsView.as_view(), name='admin-resume-records'),
+    path('admin/records/<str:reference_no>', AdminResumeRecordDetailView.as_view(), name='admin-resume-record-detail'),
     
     # AI Evaluation Endpoints (Gemini-powered)
     path('ai/status', GeminiStatusView.as_view(), name='gemini-status'),

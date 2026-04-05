@@ -9,6 +9,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 urlpatterns = [
     # Admin interface
     path('admin/', admin.site.urls),
+    path('accounts/', include('allauth.urls')),
     
     # JWT Authentication endpoints (SRS FR-7.6)
     path('api/v1/auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),

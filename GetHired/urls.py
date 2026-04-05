@@ -14,6 +14,9 @@ urlpatterns = [
     path('api/v1/auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/v1/auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     
-    # Phase 1 minimal API surface used by frontend contracts.
+    # Phase 1 and Phase 2 API surface.
+    path('api/v1/', include('core.urls')),
+    path('api/v1/resumes/', include('ingestion.urls')),
+    path('api/v1/privacy/', include('privacy.urls')),
     path('api/v1/', include('matching.urls')),
 ]

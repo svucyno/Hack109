@@ -21,6 +21,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env()
 environ.Env.read_env(BASE_DIR / '.env')
 
+# AI provider config, exposed for runtime checks in integration modules
+GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
+GEMINI_ENABLED = env.bool('GEMINI_ENABLED', default=False)
+GEMINI_MODEL = env('GEMINI_MODEL', default='gemini-2.0-flash-lite')
+OPENROUTER_API_KEY = env('OPENROUTER_API_KEY', default='')
+OPENROUTER_ENABLED = env.bool('OPENROUTER_ENABLED', default=False)
+OPENROUTER_MODEL = env('OPENROUTER_MODEL', default='anthropic/claude-3-haiku')
+
 # Secret key managed via environment for production
 SECRET_KEY = env(
     'DJANGO_SECRET_KEY',
@@ -87,14 +95,10 @@ WSGI_APPLICATION = 'GetHired.wsgi.application'
 
 # Database - PostgreSQL with pgvector support (SRS requirement)
 DATABASES = {
-    'default': {
-        'ENGINE': env('DB_ENGINE', default='django.db.backends.postgresql'),
-        'NAME': env('DB_NAME', default='gethired'),
-        'USER': env('DB_USER', default='postgres'),
-        'PASSWORD': env('DB_PASSWORD', default='password'),
-        'HOST': env('DB_HOST', default='localhost'),
-        'PORT': env('DB_PORT', default='5432'),
-    }
+    'default': env.db(
+        'DATABASE_URL',
+        default='postgresql://postgres:password@localhost:5432/gethired',
+    )
 }
 
 
@@ -115,6 +119,16 @@ USE_TZ = True
 # Static files
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Resume upload storage (local resume/ folder with optional S3 support)
+RESUME_STORAGE_DIR = BASE_DIR / 'resume'
+RESUME_STORAGE_BUCKET = env('AWS_STORAGE_BUCKET_NAME', default='')
+RESUME_STORAGE_REGION = env('AWS_S3_REGION_NAME', default='')
+RESUME_STORAGE_ENDPOINT_URL = env('AWS_S3_ENDPOINT_URL', default='')
+RESUME_STORAGE_ACCESS_KEY_ID = env('AWS_ACCESS_KEY_ID', default='')
+RESUME_STORAGE_SECRET_ACCESS_KEY = env('AWS_SECRET_ACCESS_KEY', default='')
+RESUME_STORAGE_PREFIX = env('RESUME_STORAGE_PREFIX', default='resumes')
+RESUME_PRESIGNED_URL_EXPIRY_SECONDS = env.int('RESUME_PRESIGNED_URL_EXPIRY_SECONDS', default=900)
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

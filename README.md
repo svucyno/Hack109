@@ -25,22 +25,42 @@ pip install -r requirements.txt
 
 ## 2. Configure Environment Variables
 
-Create your local environment file from the example:
+Use profile-specific env files:
 
 ```powershell
-Copy-Item .env.example .env
+# Development
+Copy-Item .env.dev .env
+
+# Production
+Copy-Item .env.prod .env
 ```
 
-Update values in .env as needed, especially:
+`.env` stays untracked and is your active runtime file.
+`.env.dev` and `.env.prod` are tracked templates for each environment.
+`.env.example` is a neutral baseline template.
+
+Update values in `.env` as needed, especially:
 
 - DJANGO_SECRET_KEY
-- DB_NAME
-- DB_USER
-- DB_PASSWORD
-- DB_HOST
-- DB_PORT
+- DATABASE_URL
+- AWS_STORAGE_BUCKET_NAME
+- AWS_S3_REGION_NAME
+- AWS_ACCESS_KEY_ID
+- AWS_SECRET_ACCESS_KEY
 - CELERY_BROKER_URL
 - CELERY_RESULT_BACKEND
+
+If AWS storage values are left blank, uploaded resumes are stored locally in the `resume/` folder.
+
+## Resume Upload Security Flow (Pre-signed URL)
+
+1. Frontend calls `POST /api/v1/resumes/upload-url` with filename and content type.
+2. Backend signs a temporary S3 upload URL using IAM keys.
+3. Frontend uploads the file directly to S3 using the pre-signed URL.
+4. Frontend calls `POST /api/v1/resumes/register-upload` with `reference_no` and `s3_key`.
+5. Backend stores the `s3_key` in DB and parsing can start with `POST /api/v1/resumes/{reference_no}/parse`.
+
+If S3 is not configured, frontend automatically falls back to direct `POST /api/v1/resumes/upload` and files are saved under `resume/`.
 
 ## 3. Start PostgreSQL and Redis
 
@@ -99,11 +119,34 @@ celery -A GetHired beat -l info
 5. Celery worker
 6. Celery beat (optional)
 
+## AI-Powered Candidate Evaluation (Google Gemini)
+
+GetHired integrates Google's Gemini API for intelligent candidate assessment, deep resume analysis, and personalized career recommendations.
+
+### Setup
+
+1. Get your free Gemini API key from [Google AI Studio](https://makersuite.google.com/app/apikey)
+2. Add to `.env`:
+   ```env
+   GEMINI_API_KEY=YOUR_API_KEY_HERE
+   GEMINI_ENABLED=True
+   ```
+
+### AI Endpoints
+
+- `GET /api/v1/ai/status` - Check if Gemini is enabled
+- `POST /api/v1/candidates/{reference_no}/ai-evaluation` - Score candidate for job role
+- `GET /api/v1/candidates/{reference_no}/ai-analysis` - Deep resume analysis
+- `POST /api/v1/candidates/{reference_no}/career-recommendations` - Learning path recommendations
+
+See [GEMINI_SETUP.md](GEMINI_SETUP.md) for complete API documentation and examples.
+
 ## Quick Health Checks
 
 - Django server: open http://127.0.0.1:8000/admin/
 - Redis reachable: worker starts without broker connection errors
 - DB reachable: migrations complete without connection errors
+- Gemini AI: run `curl http://127.0.0.1:8000/api/v1/ai/status`
 
 ## Common Issues
 

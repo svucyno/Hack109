@@ -10,26 +10,23 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Secret key managed via environment for production
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-dev-only-replace-in-production')
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# Debug mode controlled by environment
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-+^&qpxovy%1w-amwrh+vk*rl@9s@q4ij7t+(^(ck#8b_@6#zhv'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
 
 # Application definition
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -37,10 +34,23 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    
+    # Third-party
+    'rest_framework',
+    'corsheaders',
+    'django_celery_beat',
+    
+    # GetHired apps
+    'core',
+    'ingestion',
+    'privacy',
+    'matching',
+    'governance',
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -68,50 +78,122 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'GetHired.wsgi.application'
 
-
-# Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
+# Database - PostgreSQL with pgvector support (SRS requirement)
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('DB_NAME', 'gethired'),
+        'USER': os.getenv('DB_USER', 'postgres'),
+        'PASSWORD': os.getenv('DB_PASSWORD', 'password'),
+        'HOST': os.getenv('DB_HOST', 'localhost'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
 }
 
 
 # Password validation
-# https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
+    {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
+    {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-
 # Internationalization
-# https://docs.djangoproject.com/en/6.0/topics/i18n/
-
 LANGUAGE_CODE = 'en-us'
-
 TIME_ZONE = 'UTC'
-
 USE_I18N = True
-
 USE_TZ = True
 
+# Static files
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/6.0/howto/static-files/
+# Default primary key field type
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-STATIC_URL = 'static/'
+# ============================================================
+# REST Framework Configuration (SRS FR-7.x compliance)
+# ============================================================
+REST_FRAMEWORK = {
+    'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.URLPathVersioning',
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'DEFAULT_FILTER_BACKENDS': [
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'EXCEPTION_HANDLER': 'core.exceptions.custom_exception_handler',
+}
+
+# JWT Configuration (SRS FR-7.6)
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+}
+
+# CORS Configuration (SRS FR-7.7)
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',  # Vite dev server
+    'http://localhost:3000',
+]
+CORS_ALLOW_CREDENTIALS = True
+
+# Celery Configuration (async worker for SRS NFR-5.1)
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['application/json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# Logging Configuration (SRS NFR-5.4)
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'json': {
+            '()': 'core.logging.JSONFormatter',
+        },
+        'standard': {
+            'format': '[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'level': 'INFO',
+            'class': 'logging.StreamHandler',
+            'formatter': 'json',
+        },
+    },
+    'loggers': {
+        'django': {'handlers': ['console'], 'level': 'INFO'},
+        'GetHired': {'handlers': ['console'], 'level': 'DEBUG'},
+    },
+}
+
+# Security Headers (SRS NFR-2.5)
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not DEBUG
+
+# Split-Data Architecture Configuration (SRS Section 2)
+SPLIT_DATA_CONFIG = {
+    'PII_ENTITIES_TO_REDACT': [
+        'PERSON', 'EMAIL_ADDRESS', 'PHONE_NUMBER', 'LOCATION', 'URL'
+    ],
+    'PII_HIGH_CONFIDENCE_THRESHOLD': 0.7,
+    'EMBEDDING_MODELS': ['text-embedding-3-small', 'all-MiniLM-L6-v2'],
+    'AUDIT_LOG_RETENTION_DAYS': 180,
+}

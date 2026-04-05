@@ -1,92 +1,178 @@
-Product Requirements Document (PRD): AI Talent & Career Ecosystem
-Date: April 4, 2026
+# Product Requirements Document (PRD): AI Talent and Career Ecosystem
+Date: April 5, 2026
+Status: Defined (MVP Build-Ready)
+Version: 1.1
 
-Status: Defined (MVP Phase)
+## 0. Implementation Stack Decision
+Backend:
+- Python 3.12+
+- Django 5.x
+- Django REST Framework for API layer
 
-Target Domains: HR Recruitment & Student Career Development
+Frontend:
+- React 18+
+- Vite 5+ build tooling
 
-1. Executive Summary
-The Unified AI Talent Platform is an end-to-end "Skills-First" ecosystem designed to bridge the employability gap. For HR Professionals, it removes the "keyword wall" by ranking candidates based on semantic potential. For Students, it acts as a career co-pilot, identifying skill gaps and recommending trajectories. A core differentiator is the Split-Data Architecture, which ensures that AI evaluation is performed on de-identified data to eliminate bias and comply with the EU AI Act 2026.    
+Data and infra (MVP):
+- PostgreSQL 16+ with pgvector
+- Redis optional for async queue/cache
 
-2. Problem Statement
-Recruitment Inefficiency: HR teams face a "signal noise" crisis, with 70% of resumes being filtered out by rigid keyword-based ATS systems, often overlooking "hidden gems" who lack specific buzzwords.
+This PRD assumes a Django API-first architecture consumed by a React SPA.
 
-The Guidance Gap: Students are often "prepared but not employable," lacking clear roadmaps to translate academic projects into industry-standard competencies.
+## 1. Executive Summary
+The AI Talent and Career Ecosystem is a skills-first platform for two domains:
+- HR recruitment: semantic candidate ranking and explainable shortlisting.
+- Student guidance: career path recommendations, skill gap detection, and course suggestions.
 
-Privacy & Bias: Traditional AI screening risks "demographic leakage," where personal identifiers (names, zip codes, schools) skew model outcomes.    
+The core differentiator is a split-data architecture where AI services only process de-identified profile data linked by a Reference Number. Personally identifiable information (PII) remains isolated in a secured primary store.
 
-3. Target Personas
-Persona	Role	Primary Goal	Key Pain Point
-TA Manager	Recruiter	Surface the top 5% of talent in hours, not weeks.	Manual screening fatigue and inconsistent evaluation criteria.
-Final-Year Student	Applicant	
-Understand exactly what skills are needed for a target role. 
+## 2. Problem Statement
+Recruitment inefficiency:
+- Keyword-based filtering rejects qualified candidates lacking exact buzzwords.
+- Recruiters spend excessive time on manual screening.
 
-Generic career advice and black-box rejections.
-University Admin	Advisor	Improve placement rates for their cohort.	
-Scaling personalized guidance to thousands of students. 
+Guidance gap:
+- Students lack concrete, role-specific, skill-building plans.
+- Generic advice does not convert to employability outcomes.
 
-  
-4. Key Functional Features
-4.1 Feature #6: Intelligent Split-Data Parser & Redactor
-Logic: Upon upload, the system extracts text and uses Microsoft Presidio or NER models to identify PII.    
+Privacy and bias:
+- Identity signals can leak into model decisions.
+- High-risk AI usage in recruitment requires explainability, oversight, and auditability.
 
-Primary Store: Encrypts and stores the full raw resume (PII included) linked to a internal User_ID.
+## 3. Personas and Jobs To Be Done
+1. TA Manager (Recruiter)
+- Goal: Identify top candidates in hours instead of weeks.
+- Job to be done: Rank applicants by skill-match, review evidence, and de-anonymize only when justified.
 
-Reference Store: Stores only de-identified skills, experiences, and project summaries linked to a unique Reference Number. Only this data is shared with the AI for scoring.
+2. Final-Year Student (Applicant)
+- Goal: Understand target role fit and close missing skills.
+- Job to be done: Receive role matches, skill gaps, and prioritized course actions.
 
-4.2 Feature #1: Explainable AI ATS Scoring (HR Domain)
-Logic: Ranks the anonymized Reference_Profile against Job Descriptions (JD) using Cosine Similarity.
+3. University Admin (Advisor)
+- Goal: Improve cohort placement outcomes at scale.
+- Job to be done: Track student readiness trends and support intervention plans.
 
-Formula:
+## 4. Product Scope (MVP)
+In scope:
+1. Resume upload and parsing (PDF/DOCX; OCR fallback for scanned PDFs).
+2. PII detection and redaction pipeline.
+3. Split-data persistence:
+- Primary store: raw resume + PII metadata.
+- Reference store: de-identified profile + embeddings.
+4. Explainable ATS scoring against job descriptions.
+5. Student role recommendation and skill-gap analysis.
+6. External course recommendations (Coursera/NPTEL adapters).
+7. Recruiter de-anonymization workflow with approvals and logging.
+8. Dashboard visibility for recruiter, student, and admin roles.
 
-Match Score= 
-∥JD∥∥Resume∥
-JD⋅Resume
-​
- 
-Output: Provides an explainable 1–5 ranking. A "Reasoning Block" cites specific evidence (e.g., "Matched 85% due to 3+ years in Cloud Infrastructure") while hiding the candidate's name.    
+Out of scope (MVP):
+1. Video interview analysis.
+2. Automatic job applications.
+3. Post-hire payroll/benefits workflows.
 
-4.3 Feature #5: Career Recommendation Engine (Student Domain)
-Logic: Analyzes the Reference_Profile to suggest 3–5 potential career paths (e.g., "Based on your Math and Python projects, you match the FinTech Analyst path").
+## 5. Key Features and Product Decisions
+### 5.1 Split-Data Parser and Redactor
+- Extracts text and identifies PII using Presidio plus NER fallback.
+- Stores original payload in primary store and de-identified payload in reference store.
+- Blocks AI scoring if PII leakage checks fail.
 
-Visualization: Uses Plotly-generated donut charts to show path alignment.
+### 5.2 Explainable ATS Scoring (HR)
+- Uses cosine similarity between JD and resume embeddings.
+- Formula:
 
-4.4 Feature #7: Role Matcher & Skill Gap Analysis
-Logic: Subtracts the user's skill vector from a target role vector to identify missing competencies.    
+$$
+\text{cosine}(A, B) = \frac{A \cdot B}{\lVert A \rVert \lVert B \rVert}
+$$
 
-Action: Retrieves real-time course recommendations from Coursera or NPTEL APIs to bridge the gap.    
+- Produces:
+- normalized similarity score in [0,1]
+- recruiter-facing rank bucket (1 to 5)
+- reasoning block with evidence spans from de-identified text
 
-5. Technical Requirements & Database Strategy
-5.1 Database Roadmap
-MVP Phase: PostgreSQL + pgvector. Reintegration of AI results is handled via a simple SQL JOIN between the Primary_Store and Reference_Store using the Reference No. This ensures ACID compliance and data integrity for up to 5 million profiles.
+### 5.3 Career Recommendation Engine (Student)
+- Suggests 3 to 5 role paths from profile semantics and project history.
+- Shows confidence per role and rationale highlights.
+- Visualizes role alignment and skill category coverage.
 
-Scaling Phase: Migrate the Reference_Store to Qdrant. This supports billion-scale vector search and "In-Graph Filtering," allowing HR to filter by anonymized criteria (e.g., "Must have PhD") during the vector search with sub-30ms latency.
+### 5.4 Role Matcher and Skill Gap Analysis
+- Computes missing competencies relative to target role profile.
+- Prioritizes gaps by impact and dependency order.
+- Recommends learning resources with metadata (duration, level, provider, language).
 
-5.2 Performance Benchmarks
-Latency: First response for recommendations must be <0.5 seconds.
+## 6. Product KPIs and Targets
+Primary KPIs:
+1. Time-to-hire reduction: 30% to 50% from baseline.
+2. Recruiter quality correlation: at least 0.87 with expert recruiter scoring.
+3. Student skill-readiness uplift: at least 25% average gain over baseline assessment.
+4. Fairness KPI: Disparate Impact Ratio (DIR) at least 0.80 per monitored cohort.
 
-Accuracy: Achieve ≥87% correlation with expert human recruiters.
+Operational KPIs:
+1. PII leakage rate into reference profiles: 0 critical leakages in production.
+2. De-anonymization audit coverage: 100% of events logged.
+3. Recommendation first-response latency: p95 less than 500 ms (for pre-embedded candidates).
 
-6. Success Metrics
-Efficiency: Reduce HR "Time-to-Hire" by 30–50%.    
+## 7. Latency Budget (MVP)
+To make the p95 target realistic, the pipeline is split into synchronous and asynchronous stages.
 
-Equity: Maintain a Disparate Impact Ratio (DIR) of ≥0.80 to ensure fairness.
+Synchronous serving path (recommendation request):
+1. Candidate fetch + authorization: <= 50 ms
+2. Vector similarity retrieval: <= 120 ms
+3. Reasoning block generation (template-based extractive): <= 150 ms
+4. Reintegration join and response assembly: <= 120 ms
+Total p95 target: <= 440 ms
 
-Readiness: 25% average improvement in student skill scores after using recommendations.    
+Asynchronous ingestion path (on upload):
+1. Document extraction + OCR fallback: <= 1200 ms
+2. PII detection and redaction: <= 1200 ms
+3. Embedding generation + indexing: <= 1000 ms
+Total target: <= 3400 ms
 
-7. Legal & Compliance (EU AI Act 2026)
-As a "High-Risk" AI application (Recruitment), the system must:
+## 8. Compliance and Governance Requirements
+1. Human oversight:
+- Recruiters can request de-anonymization after threshold eligibility.
+- Approval reason is mandatory and immutable in logs.
 
-Human Oversight (Art. 14): Provide a toggle for recruiters to "De-anonymize" and override AI rankings.    
+2. Transparency:
+- Each ranking decision exposes a user-readable explanation including key matched skills and missing requirements.
 
-Transparency (Art. 13): Include a "Right to Explanation" for any AI-driven rejection.
+3. Audit logging:
+- Log all split, score, de-anonymize, and override actions.
+- Retention minimum: 6 months (configurable to 12 months).
 
-Audit Logging (Art. 12): Automatically log all data-split and evaluation events for 6+ months.
+4. Data minimization:
+- AI services receive only de-identified payloads.
+- No direct access from model service to primary store.
 
-8. Out of Scope
-Handling of live video interview feeds (Initial phase covers text-based screening only).
+## 9. Fairness Evaluation Policy (MVP)
+1. Evaluation cadence:
+- Weekly automated fairness report.
+- Monthly governance review.
 
-Automatic job applications (AI acts as a partner, not an author).
+2. Metrics:
+- DIR as primary gate.
+- Secondary checks: score parity and false-negative parity by cohort.
 
-Post-hire payroll and benefits administration.    
+3. Action thresholds:
+- DIR >= 0.80: pass.
+- 0.70 <= DIR < 0.80: warning, mandatory review ticket.
+- DIR < 0.70: fail, release gate for model changes.
 
+4. Controls:
+- Versioned model and embedding rollouts with rollback switch.
+- Pre-production fairness regression required before promotion.
+
+## 10. Release Plan
+MVP release criteria:
+1. All in-scope features implemented.
+2. Security and compliance checks passed.
+3. Acceptance tests passed for:
+- PII leakage
+- ATS ranking consistency
+- latency p95
+- de-anonymization logging
+- fairness thresholds
+
+Post-MVP roadmap:
+1. Qdrant migration when profile volume and latency justify scale-out.
+2. Multi-language resume parsing and domain-specific ontologies.
+3. Advanced advisor analytics for university cohorts.

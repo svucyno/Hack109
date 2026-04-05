@@ -14,11 +14,6 @@ urlpatterns = [
     path('api/v1/auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/v1/auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     
-    # Versioned API endpoints (SRS FR-7.1, FR-7.2, FR-7.3, FR-7.4)
-    # To be populated in Phase 2-5:
-    # path('api/v1/resumes/', include('ingestion.urls')),
-    # path('api/v1/privacy/', include('privacy.urls')),
-    # path('api/v1/candidates/', include('matching.urls')),
-    # path('api/v1/students/', include('matching.urls')),
-    # path('api/v1/governance/', include('governance.urls')),
+    # Phase 1 minimal API surface used by frontend contracts.
+    path('api/v1/', include('matching.urls')),
 ]

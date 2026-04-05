@@ -7,7 +7,7 @@
 - Locked Python to 3.12+ (SRS requirement)
 - Django 5.1.3 (matching SRS requirement for Django 5.x)
 - Added DRF 3.14.0 for REST API scaffold
-- Added djangorestframework-simplejwt 5.3.2 (JWT auth per SRS FR-7.6)
+- Added django-allauth headless support for API session-token auth (FR-7.6)
 - Added django-cors-headers 4.3.1 (CORS for React SPA per SRS FR-7.7)
 - Added psycopg2-binary (PostgreSQL adapter per SRS requirement)
 - Added pgvector 0.3.0 (semantic search vectors per SRS 3.3)
@@ -21,7 +21,7 @@
 - DEBUG controlled via environment (safe by default)
 - PostgreSQL database configuration with environment variables
 - DRF configuration with URL path versioning (SRS FR-7.1)
-- JWT authentication using djangorestframework-simplejwt (SRS FR-7.6)
+- API authentication using django-allauth headless session tokens (SRS FR-7.6)
 - CORS allowlist for Vite dev server (SRS FR-7.7)
 - Celery async worker configuration (SRS NFR-5.1)
 - JSON structured logging with correlation IDs (SRS NFR-5.4)
@@ -82,14 +82,14 @@
 
 ### 6. API Routing Scaffold
 **File**: [GetHired/urls.py](../GetHired/urls.py)
-- JWT token endpoints: `/api/v1/auth/token/` and `/api/v1/auth/token/refresh/` (SRS FR-7.6)
+- Headless auth endpoints exposed under `/_allauth/app/v1/*` with `X-Session-Token` support (SRS FR-7.6)
 - Placeholder routes for Phase 2-5 endpoints (SRS FR-7.1 versioning)
 - Comments show endpoint structure per SRS requirements
 
 ### 7. Environment Configuration
 **File**: [.env.example](./.env.example)
 - Template for all required environment variables
-- Database, Redis, JWT, CORS, split-data config params
+- Database, Redis, CORS, split-data config params
 - User should copy to `.env` and populate for local development
 
 ## Architecture Decisions (SRS-Compliant)

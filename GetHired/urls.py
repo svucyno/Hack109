@@ -4,16 +4,12 @@ SRS FR-7.1: API shall expose versioned REST endpoints under /api/v1
 """
 from django.contrib import admin
 from django.urls import path, include
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 urlpatterns = [
     # Admin interface
     path('admin/', admin.site.urls),
     path('accounts/', include('allauth.urls')),
-    
-    # JWT Authentication endpoints (SRS FR-7.6)
-    path('api/v1/auth/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('api/v1/auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('_allauth/', include('allauth.headless.urls')),
     
     # Phase 1 and Phase 2 API surface.
     path('api/v1/', include('core.urls')),

@@ -171,7 +171,7 @@ Any unresolved high-confidence PII entities above policy threshold block downstr
 - FR-7.3: Endpoint POST /candidates/{reference_no}/deanonymize shall enforce FR-6 policy checks.
 - FR-7.4: Endpoint GET /students/{user_id}/recommendations shall return role paths, gaps, and courses.
 - FR-7.5: All API endpoints shall be implemented in DRF and emit JSON responses with standardized error schema.
-- FR-7.6: API authentication shall support JWT bearer tokens for SPA clients.
+- FR-7.6: API authentication shall support django-allauth headless session tokens for SPA clients.
 - FR-7.7: API shall enforce CORS allowlist for approved frontend origins.
 
 ### 4.8 Frontend Requirements (React + Vite)
@@ -296,7 +296,7 @@ Each FR/NFR shall map to:
 | FR-7.3 | Governance Service | POST /api/v1/candidates/{reference_no}/deanonymize | Mapping_Table, Audit_Log | TS-API-003 | M-API-DEANON-POLICY-ENFORCEMENT | MVP-BLOCKER |
 | FR-7.4 | Recommendation Service | GET /api/v1/students/{user_id}/recommendations | Reference_Profile | TS-API-004 | M-API-RECOMMENDATION-UPTIME | MVP-BLOCKER |
 | FR-7.5 | Django API Service | /api/v1/* | Audit_Log | TS-API-005 | M-API-ERROR-SCHEMA-COMPLIANCE | MVP-BLOCKER |
-| FR-7.6 | Django API Service | /api/v1/* | Audit_Log | TS-API-006 | M-API-JWT-AUTH-SUCCESS-RATE | MVP-BLOCKER |
+| FR-7.6 | Django API Service | /api/v1/* | Audit_Log | TS-API-006 | M-API-SESSION-AUTH-SUCCESS-RATE | MVP-BLOCKER |
 | FR-7.7 | Django API Service | /api/v1/* | N/A | TS-API-007 | M-API-CORS-BLOCK-RATE | MVP-BLOCKER |
 | FR-8.1 | Frontend SPA Service | N/A | N/A | TS-FE-001 | M-FE-BUILD-ARTIFACT-INTEGRITY | MVP-BLOCKER |
 | FR-8.2 | Frontend SPA Service | /api/v1/* | N/A | TS-FE-002 | M-FE-API-ONLY-CALL-COMPLIANCE | MVP-BLOCKER |

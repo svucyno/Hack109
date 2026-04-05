@@ -713,7 +713,7 @@ function AdminPage(props: {
   const [adminValidationResult, setAdminValidationResult] = useState("");
   const [adminUsername, setAdminUsername] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  const [adminToken, setAdminToken] = useState(localStorage.getItem("gethired_admin_access_token") || "");
+  const [adminToken, setAdminToken] = useState(localStorage.getItem("gethired_admin_session_token") || "");
   const [adminLoginError, setAdminLoginError] = useState("");
   const [recordsPayload, setRecordsPayload] = useState<AdminRecordListResponse | null>(null);
   const [selectedRef, setSelectedRef] = useState("");
@@ -721,14 +721,14 @@ function AdminPage(props: {
   const [recordsError, setRecordsError] = useState("");
 
   const authHeaders: Record<string, string> = adminToken
-    ? { Authorization: `Bearer ${adminToken}` }
+    ? { "X-Session-Token": adminToken }
     : {};
 
   const loginAdmin = async () => {
     setLoading(true);
     setAdminLoginError("");
     try {
-      const res = await fetch("http://127.0.0.1:8000/api/v1/auth/token/", {
+      const res = await fetch("http://127.0.0.1:8000/_allauth/app/v1/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: adminUsername, password: adminPassword }),
@@ -739,9 +739,18 @@ function AdminPage(props: {
         throw new Error(`Admin login failed (${res.status}) ${text}`);
       }
 
-      const payload = (await res.json()) as { access: string; refresh: string };
-      localStorage.setItem("gethired_admin_access_token", payload.access);
-      setAdminToken(payload.access);
+      const payload = (await res.json()) as {
+        meta?: { session_token?: string };
+        data?: { user?: { username?: string } };
+      };
+
+      const sessionToken = payload.meta?.session_token;
+      if (!sessionToken) {
+        throw new Error("Headless login did not return session token.");
+      }
+
+      localStorage.setItem("gethired_admin_session_token", sessionToken);
+      setAdminToken(sessionToken);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Admin login failed.";
       setAdminLoginError(message);
@@ -751,7 +760,7 @@ function AdminPage(props: {
   };
 
   const logoutAdmin = () => {
-    localStorage.removeItem("gethired_admin_access_token");
+    localStorage.removeItem("gethired_admin_session_token");
     setAdminToken("");
     setRecordsPayload(null);
     setRecordDetail(null);

@@ -19,4 +19,5 @@ dependencies = [
     "python-docx>=1.1.2",
     "psycopg2-binary>=2.9.11",
     "redis>=7.4.0",
+    "gunicorn>=25.3.0",
 ]

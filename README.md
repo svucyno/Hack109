@@ -141,6 +141,20 @@ GetHired integrates Google's Gemini API for intelligent candidate assessment, de
 
 See [GEMINI_SETUP.md](GEMINI_SETUP.md) for complete API documentation and examples.
 
+## Frontend (Vercel) API Configuration
+
+When deploying the frontend on Vercel, set this env var in the Vercel project:
+
+- `VITE_API_URL=http://<YOUR_ORACLE_PUBLIC_IP>:8000`
+
+The frontend auto-builds API paths under `/api/v1`, so only host and port are needed.
+
+Important:
+
+- If frontend runs on HTTPS and backend is HTTP, browsers block requests (mixed content).
+- For production, expose backend over HTTPS (for example behind Cloudflare or a reverse proxy with TLS), then set:
+   - `VITE_API_URL=https://api.yourdomain.com`
+
 ## Quick Health Checks
 
 - Django server: open http://127.0.0.1:8000/admin/

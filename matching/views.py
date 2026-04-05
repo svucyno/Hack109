@@ -3,6 +3,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from ingestion.models import ResumeUploadRecord
+
 
 CANDIDATE_SCORES = {
     'REF-001': {
@@ -65,11 +67,80 @@ STUDENT_RECOMMENDATIONS = {
     },
 }
 
+ROLE_REQUIREMENTS = {
+    'software engineer': ['Python', 'SQL', 'Git', 'REST'],
+    'backend engineer': ['Python', 'Django', 'REST', 'SQL', 'Docker'],
+    'backend developer': ['Python', 'Django', 'REST', 'SQL', 'Docker'],
+    'full stack developer': ['React', 'Node.js', 'SQL', 'REST', 'Git'],
+    'full-stack developer': ['React', 'Node.js', 'SQL', 'REST', 'Git'],
+    'devops engineer': ['Docker', 'Kubernetes', 'Linux', 'CI/CD', 'AWS', 'Azure'],
+    'cloud engineer': ['AWS', 'Azure', 'Docker', 'Kubernetes', 'Linux'],
+    'data engineer': ['Python', 'SQL', 'Pandas', 'NumPy'],
+    'machine learning engineer': ['Python', 'Machine Learning', 'TensorFlow', 'Pandas', 'NumPy'],
+}
+
+
+def _normalize_role_input(role: str) -> str:
+    lowered = role.lower().strip()
+    if lowered in ROLE_REQUIREMENTS:
+        return lowered
+    for candidate in ROLE_REQUIREMENTS:
+        if candidate in lowered or lowered in candidate:
+            return candidate
+    return lowered
+
 
 class CandidateScoreView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, reference_no: str):
+        role_input = str(request.query_params.get('role', '')).strip()
+
+        record = ResumeUploadRecord.objects.filter(reference_no=reference_no).first()
+        parsed_profile = None
+        if record and isinstance(record.parsed_json, dict):
+            parsed_profile = (record.parsed_json or {}).get('structured_profile') or {}
+
+        if parsed_profile:
+            extracted_skills = parsed_profile.get('skills') or []
+            parsed_roles = parsed_profile.get('roles') or []
+
+            selected_role = _normalize_role_input(role_input) if role_input else ''
+            if not selected_role and parsed_roles:
+                selected_role = _normalize_role_input(parsed_roles[0])
+
+            required = ROLE_REQUIREMENTS.get(selected_role, []) if selected_role else []
+            matched = [skill for skill in required if skill in extracted_skills]
+            missing = [skill for skill in required if skill not in extracted_skills]
+
+            score_normalized = 0.0
+            if required:
+                score_normalized = round(len(matched) / len(required), 2)
+            elif extracted_skills:
+                score_normalized = 0.5
+
+            bucket = max(1, min(5, round(score_normalized * 5))) if score_normalized else 1
+
+            explanation = (
+                f"Evaluation based on extracted resume skills for role '{selected_role}'."
+                if selected_role
+                else 'Evaluation based on extracted resume skills. Provide ?role=... for tighter matching.'
+            )
+
+            return Response(
+                {
+                    'reference_no': reference_no,
+                    'selected_role': selected_role or None,
+                    'score_normalized': score_normalized,
+                    'score_bucket': bucket,
+                    'explanation': explanation,
+                    'matched_skills': matched,
+                    'missing_skills': missing,
+                    'extracted_skills': extracted_skills,
+                },
+                status=status.HTTP_200_OK,
+            )
+
         candidate = CANDIDATE_SCORES.get(reference_no)
         if not candidate:
             return Response(

@@ -1,8 +1,32 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000/api/v1";
 
-type RoleView = "recruiter" | "student" | "admin";
+type RolePage = "hr" | "student" | "admin";
+
+type HrOverview = {
+  role: string;
+  title: string;
+  description: string;
+  candidate_refs: string[];
+};
+
+type StudentOverview = {
+  role: string;
+  title: string;
+  description: string;
+  default_user: string;
+};
+
+type AdminOverview = {
+  role: string;
+  title: string;
+  description: string;
+  metrics: {
+    deanonymize_audit_target: string;
+    fairness_dir_threshold: string;
+  };
+};
 
 type CandidateScore = {
   reference_no: string;
@@ -13,390 +37,351 @@ type CandidateScore = {
   missing_skills: string[];
 };
 
-type StudentRecommendation = {
-  role_path: string;
-  confidence: number;
-};
-
-type CourseRecommendation = {
-  title: string;
-  provider: string;
-  duration: string;
-  level: string;
-  url: string;
-};
-
 type StudentPayload = {
-  recommendations: StudentRecommendation[];
+  recommendations: Array<{ role_path: string; confidence: number }>;
   skill_gaps: string[];
-  courses: CourseRecommendation[];
+  courses: Array<{ title: string; provider: string; duration: string; level: string; url: string }>;
 };
 
-const MOCK_CANDIDATES: CandidateScore[] = [
-  {
-    reference_no: "REF-001",
-    score_normalized: 0.91,
-    score_bucket: 5,
-    explanation: "Strong overlap in distributed systems, Python backend APIs, and event-driven architecture.",
-    matched_skills: ["Python", "Django", "PostgreSQL", "REST"],
-    missing_skills: ["Kubernetes"],
-  },
-  {
-    reference_no: "REF-002",
-    score_normalized: 0.78,
-    score_bucket: 4,
-    explanation: "Relevant API and data modeling experience with moderate gaps in observability tooling.",
-    matched_skills: ["Python", "FastAPI", "Redis"],
-    missing_skills: ["Prometheus", "OpenTelemetry"],
-  },
-  {
-    reference_no: "REF-003",
-    score_normalized: 0.63,
-    score_bucket: 3,
-    explanation: "Good fundamentals and project depth, but skill coverage is partial for senior profile requirements.",
-    matched_skills: ["JavaScript", "Node.js", "SQL"],
-    missing_skills: ["Django", "Vector Search"],
-  },
-];
-
-const MOCK_STUDENT_PAYLOAD: StudentPayload = {
-  recommendations: [
-    { role_path: "Backend Engineer", confidence: 0.88 },
-    { role_path: "ML Platform Associate", confidence: 0.73 },
-    { role_path: "Data Engineer", confidence: 0.67 },
-  ],
-  skill_gaps: ["System Design", "Docker", "Model Evaluation Basics"],
-  courses: [
-    {
-      title: "Scalable Backend Systems",
-      provider: "Coursera",
-      duration: "5 weeks",
-      level: "Intermediate",
-      url: "https://www.coursera.org",
-    },
-    {
-      title: "Cloud Native Foundations",
-      provider: "NPTEL",
-      duration: "8 weeks",
-      level: "Beginner",
-      url: "https://nptel.ac.in",
-    },
-    {
-      title: "ML Evaluation and Fairness",
-      provider: "Coursera",
-      duration: "4 weeks",
-      level: "Intermediate",
-      url: "https://www.coursera.org",
-    },
-  ],
+type ParsePayload = {
+  reference_no: string;
+  structured_profile: {
+    skills: string[];
+    years_experience: number | null;
+  };
+  parse_meta: {
+    storage_backend: string;
+    storage_key: string;
+  };
 };
-
-async function pingBackend(): Promise<string> {
-  const res = await fetch(`${API_BASE_URL}/auth/token/`, { method: "OPTIONS" });
-  return res.ok ? "Backend reachable" : `Backend responded with ${res.status}`;
-}
 
 function toPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
 function App() {
-  const [activeRole, setActiveRole] = useState<RoleView>("recruiter");
-  const [backendStatus, setBackendStatus] = useState("Status: not checked");
+  const [page, setPage] = useState<RolePage>("hr");
+
+  const [hrOverview, setHrOverview] = useState<HrOverview | null>(null);
+  const [studentOverview, setStudentOverview] = useState<StudentOverview | null>(null);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [overviewError, setOverviewError] = useState("");
 
   const [referenceNo, setReferenceNo] = useState("REF-001");
-  const [selectedCandidate, setSelectedCandidate] = useState<CandidateScore | null>(MOCK_CANDIDATES[0]);
-  const [recruiterLoading, setRecruiterLoading] = useState(false);
-  const [recruiterError, setRecruiterError] = useState("");
+  const [candidateScore, setCandidateScore] = useState<CandidateScore | null>(null);
+  const [scoreError, setScoreError] = useState("");
 
-  const [reason, setReason] = useState("");
-  const [confirmDeanon, setConfirmDeanon] = useState(false);
-  const [deanonResult, setDeanonResult] = useState("");
-  const [deanonLoading, setDeanonLoading] = useState(false);
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [lastReferenceNo, setLastReferenceNo] = useState("");
+  const [parsePayload, setParsePayload] = useState<ParsePayload | null>(null);
 
   const [studentUserId, setStudentUserId] = useState("student-demo-001");
   const [studentPayload, setStudentPayload] = useState<StudentPayload | null>(null);
-  const [studentLoading, setStudentLoading] = useState(false);
   const [studentError, setStudentError] = useState("");
 
-  const deanonDisabled = !confirmDeanon || reason.trim().length < 10 || !selectedCandidate;
+  const [adminValidationText, setAdminValidationText] = useState("This profile has no private contact details.");
+  const [adminValidationResult, setAdminValidationResult] = useState("");
 
-  const anonymousList = useMemo(() => {
-    return [...MOCK_CANDIDATES].sort((a, b) => b.score_normalized - a.score_normalized);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const loadOverviews = async () => {
+      setOverviewError("");
+      try {
+        const [hrRes, studentRes, adminRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/hr`),
+          fetch(`${API_BASE_URL}/student`),
+          fetch(`${API_BASE_URL}/admin`),
+        ]);
+        if (!hrRes.ok || !studentRes.ok || !adminRes.ok) {
+          throw new Error("overview endpoints unavailable");
+        }
+
+        const hrData = (await hrRes.json()) as HrOverview;
+        const studentData = (await studentRes.json()) as StudentOverview;
+        const adminData = (await adminRes.json()) as AdminOverview;
+
+        setHrOverview(hrData);
+        setStudentOverview(studentData);
+        setAdminOverview(adminData);
+        setStudentUserId(studentData.default_user || "student-demo-001");
+      } catch {
+        setOverviewError("Failed to load role pages from backend endpoints.");
+      }
+    };
+
+    void loadOverviews();
   }, []);
 
-  const runPing = async () => {
-    setBackendStatus("Checking backend...");
-    try {
-      const result = await pingBackend();
-      setBackendStatus(result);
-    } catch {
-      setBackendStatus("Backend unreachable. Check Django server and CORS settings.");
-    }
-  };
-
-  const fetchCandidate = async () => {
-    if (!referenceNo.trim()) {
-      setRecruiterError("Enter a reference number to fetch a score.");
-      return;
-    }
-
-    setRecruiterLoading(true);
-    setRecruiterError("");
+  const fetchScore = async () => {
+    setLoading(true);
+    setScoreError("");
     try {
       const res = await fetch(`${API_BASE_URL}/candidates/${referenceNo.trim()}/score`);
       if (!res.ok) {
-        throw new Error(`Endpoint unavailable (${res.status})`);
+        throw new Error("score endpoint failed");
       }
-      const data = (await res.json()) as CandidateScore;
-      setSelectedCandidate(data);
+      setCandidateScore((await res.json()) as CandidateScore);
     } catch {
-      const fallback = MOCK_CANDIDATES.find((item) => item.reference_no === referenceNo.trim());
-      if (fallback) {
-        setSelectedCandidate(fallback);
-      } else {
-        setSelectedCandidate(null);
-      }
-      setRecruiterError("Using local Phase 1 mock data until matching endpoints are implemented.");
+      setScoreError("Score endpoint failed for this reference.");
+      setCandidateScore(null);
     } finally {
-      setRecruiterLoading(false);
+      setLoading(false);
     }
   };
 
-  const submitDeAnonymize = async () => {
-    if (!selectedCandidate) return;
-
-    setDeanonLoading(true);
-    setDeanonResult("");
-    try {
-      const res = await fetch(`${API_BASE_URL}/candidates/${selectedCandidate.reference_no}/deanonymize`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ reason: reason.trim() }),
-      });
-      if (!res.ok) {
-        throw new Error(`Policy endpoint unavailable (${res.status})`);
-      }
-      setDeanonResult("De-anonymization request submitted and logged for policy review.");
-    } catch {
-      setDeanonResult(
-        "Governance endpoint is not live yet. UI validation passed and request payload is ready for Phase 4 integration."
-      );
-    } finally {
-      setDeanonLoading(false);
-    }
-  };
-
-  const loadStudentDashboard = async () => {
-    if (!studentUserId.trim()) {
-      setStudentError("Provide a user id to load recommendations.");
+  const uploadResume = async () => {
+    if (!resumeFile) {
+      setUploadError("Select a PDF file first.");
       return;
     }
 
-    setStudentLoading(true);
+    setLoading(true);
+    setUploadError("");
+    setUploadStatus("");
+
+    try {
+      const presignedRes = await fetch(`${API_BASE_URL}/resumes/upload-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: resumeFile.name, content_type: resumeFile.type || "application/pdf" }),
+      });
+
+      if (presignedRes.ok) {
+        const pre = (await presignedRes.json()) as {
+          reference_no: string;
+          upload_url: string;
+          s3_key: string;
+        };
+
+        const putRes = await fetch(pre.upload_url, {
+          method: "PUT",
+          body: resumeFile,
+        });
+
+        if (!putRes.ok) {
+          throw new Error(`S3 upload failed (${putRes.status})`);
+        }
+
+        const registerRes = await fetch(`${API_BASE_URL}/resumes/register-upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reference_no: pre.reference_no,
+            s3_key: pre.s3_key,
+            filename: resumeFile.name,
+            content_type: resumeFile.type || "application/pdf",
+          }),
+        });
+
+        if (!registerRes.ok) {
+          const registerError = await registerRes.text();
+          throw new Error(`register failed (${registerRes.status}) ${registerError}`);
+        }
+
+        setLastReferenceNo(pre.reference_no);
+        setUploadStatus(`Uploaded to S3 with key: ${pre.s3_key}`);
+        return;
+      }
+
+      const preError = await presignedRes.text();
+      throw new Error(`upload-url failed (${presignedRes.status}) ${preError}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed.";
+      setUploadError(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const parseResume = async () => {
+    if (!lastReferenceNo.trim()) {
+      setUploadError("Upload a resume first to get a reference number.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/resumes/${lastReferenceNo}/parse`, { method: "POST" });
+      if (!res.ok) {
+        throw new Error("parse failed");
+      }
+      setParsePayload((await res.json()) as ParsePayload);
+    } catch {
+      setUploadError("Parse failed for the uploaded reference.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadStudent = async () => {
+    setLoading(true);
     setStudentError("");
     try {
       const res = await fetch(`${API_BASE_URL}/students/${studentUserId.trim()}/recommendations`);
       if (!res.ok) {
-        throw new Error(`Endpoint unavailable (${res.status})`);
+        throw new Error("student endpoint failed");
       }
-      const data = (await res.json()) as StudentPayload;
-      setStudentPayload(data);
+      setStudentPayload((await res.json()) as StudentPayload);
     } catch {
-      setStudentPayload(MOCK_STUDENT_PAYLOAD);
-      setStudentError("Using local Phase 1 student data until recommendation endpoints are implemented.");
+      setStudentError("Failed to load student recommendations from backend.");
+      setStudentPayload(null);
     } finally {
-      setStudentLoading(false);
+      setLoading(false);
+    }
+  };
+
+  const runAdminValidation = async () => {
+    setLoading(true);
+    setAdminValidationResult("");
+    try {
+      const res = await fetch(`${API_BASE_URL}/privacy/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: adminValidationText }),
+      });
+
+      if (res.ok) {
+        const data = (await res.json()) as { status: string; message: string };
+        setAdminValidationResult(`${data.status.toUpperCase()}: ${data.message}`);
+      } else {
+        setAdminValidationResult("BLOCKED: high-confidence PII detected.");
+      }
+    } catch {
+      setAdminValidationResult("Validation endpoint unavailable.");
+    } finally {
+      setLoading(false);
     }
   };
 
   return (
-    <div className="page">
-      <header className="hero">
-        <p className="eyebrow">GetHired Platform</p>
-        <h1>Phase 1 Frontend Control Center</h1>
-        <p className="subtitle">
-          Split-data UX for recruiter, student, and governance flows with API-ready contracts under /api/v1.
-        </p>
-        <div className="actions">
-          <button type="button" onClick={runPing}>
-            Check Backend
-          </button>
-          <a href="http://127.0.0.1:8000/admin/" target="_blank" rel="noreferrer">
-            Open Django Admin
-          </a>
-        </div>
-        <p className="status">{backendStatus}</p>
+    <div className="shell">
+      <header className="masthead">
+        <p className="tag">GetHired v2</p>
+        <h1>Role-Specific Portal</h1>
+        <p>Three dedicated pages powered by individual backend endpoints for HR, Student, and Admin.</p>
       </header>
 
-      <nav className="tabs" aria-label="Role switcher">
-        <button type="button" className={activeRole === "recruiter" ? "tab active" : "tab"} onClick={() => setActiveRole("recruiter")}>
-          Recruiter
+      <nav className="role-nav" aria-label="role navigation">
+        <button className={page === "hr" ? "active" : ""} onClick={() => setPage("hr")} type="button">
+          HR Page
         </button>
-        <button type="button" className={activeRole === "student" ? "tab active" : "tab"} onClick={() => setActiveRole("student")}>
-          Student
+        <button className={page === "student" ? "active" : ""} onClick={() => setPage("student")} type="button">
+          Student Page
         </button>
-        <button type="button" className={activeRole === "admin" ? "tab active" : "tab"} onClick={() => setActiveRole("admin")}>
-          Admin
+        <button className={page === "admin" ? "active" : ""} onClick={() => setPage("admin")} type="button">
+          Admin Page
         </button>
       </nav>
 
-      <main className="workspace">
-        {activeRole === "recruiter" && (
-          <section className="panel">
-            <h2>Recruiter Blind Evaluation</h2>
-            <p className="hint">Default list is anonymized and sorted by normalized score.</p>
+      {overviewError && <p className="error">{overviewError}</p>}
 
-            <div className="metrics-grid">
-              {anonymousList.map((candidate) => (
-                <article key={candidate.reference_no} className="metric-card">
-                  <h3>{candidate.reference_no}</h3>
-                  <p className="metric">{toPercent(candidate.score_normalized)}</p>
-                  <p>Bucket {candidate.score_bucket}</p>
-                </article>
-              ))}
-            </div>
+      {page === "hr" && (
+        <section className="panel">
+          <h2>{hrOverview?.title || "HR Talent Dashboard"}</h2>
+          <p>{hrOverview?.description}</p>
 
-            <div className="form-row">
-              <label htmlFor="referenceNo">Reference no</label>
-              <input
-                id="referenceNo"
-                value={referenceNo}
-                onChange={(event) => setReferenceNo(event.target.value)}
-                placeholder="REF-001"
-              />
-              <button type="button" onClick={fetchCandidate} disabled={recruiterLoading}>
-                {recruiterLoading ? "Loading..." : "Fetch Score"}
+          <div className="card-grid">
+            <article className="card">
+              <h3>Candidate Scoring</h3>
+              <input value={referenceNo} onChange={(e) => setReferenceNo(e.target.value)} placeholder="REF-001" />
+              <button onClick={fetchScore} type="button" disabled={loading}>
+                Fetch Score
               </button>
-            </div>
-
-            {recruiterError && <p className="alert">{recruiterError}</p>}
-
-            {selectedCandidate && (
-              <article className="details-card">
-                <h3>Score Details: {selectedCandidate.reference_no}</h3>
-                <p>{selectedCandidate.explanation}</p>
-                <p>
-                  Matched: <strong>{selectedCandidate.matched_skills.join(", ")}</strong>
-                </p>
-                <p>
-                  Missing: <strong>{selectedCandidate.missing_skills.join(", ")}</strong>
-                </p>
-              </article>
-            )}
-
-            <article className="details-card">
-              <h3>De-anonymization Request</h3>
-              <p className="hint">Mandatory reason and explicit confirmation are required before submission.</p>
-              <label htmlFor="reason">Reason (minimum 10 characters)</label>
-              <textarea
-                id="reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="Example: final-round panel requires identity for interview scheduling."
-              />
-              <label className="checkline" htmlFor="confirmDeanon">
-                <input
-                  id="confirmDeanon"
-                  type="checkbox"
-                  checked={confirmDeanon}
-                  onChange={(event) => setConfirmDeanon(event.target.checked)}
-                />
-                I confirm this action is policy compliant and will be audited.
-              </label>
-              <button type="button" disabled={deanonDisabled || deanonLoading} onClick={submitDeAnonymize}>
-                {deanonLoading ? "Submitting..." : "Submit De-anonymize Request"}
-              </button>
-              {deanonResult && <p className="status-inline">{deanonResult}</p>}
+              {scoreError && <p className="error">{scoreError}</p>}
+              {candidateScore && (
+                <div className="result">
+                  <p>
+                    <strong>{candidateScore.reference_no}</strong> - {toPercent(candidateScore.score_normalized)} (bucket {candidateScore.score_bucket})
+                  </p>
+                  <p>{candidateScore.explanation}</p>
+                </div>
+              )}
             </article>
-          </section>
-        )}
 
-        {activeRole === "student" && (
-          <section className="panel">
-            <h2>Student Career Dashboard</h2>
-            <div className="form-row">
-              <label htmlFor="studentUserId">User id</label>
-              <input
-                id="studentUserId"
-                value={studentUserId}
-                onChange={(event) => setStudentUserId(event.target.value)}
-                placeholder="student-demo-001"
-              />
-              <button type="button" onClick={loadStudentDashboard} disabled={studentLoading}>
-                {studentLoading ? "Loading..." : "Load Recommendations"}
+            <article className="card">
+              <h3>Resume Upload</h3>
+              <input type="file" accept=".pdf" onChange={(e) => setResumeFile(e.target.files?.[0] || null)} />
+              <button onClick={uploadResume} type="button" disabled={loading}>
+                Upload Resume
               </button>
-            </div>
+              <button onClick={parseResume} type="button" disabled={loading || !lastReferenceNo}>
+                Parse Uploaded Resume
+              </button>
+              {uploadStatus && <p className="ok">{uploadStatus}</p>}
+              {uploadError && <p className="error">{uploadError}</p>}
+              {lastReferenceNo && <p className="meta">Reference: {lastReferenceNo}</p>}
+              {parsePayload && (
+                <div className="result">
+                  <p>
+                    Skills: <strong>{parsePayload.structured_profile.skills.join(", ") || "None"}</strong>
+                  </p>
+                  <p>
+                    Storage: {parsePayload.parse_meta.storage_backend} ({parsePayload.parse_meta.storage_key})
+                  </p>
+                </div>
+              )}
+            </article>
+          </div>
+        </section>
+      )}
 
-            {studentError && <p className="alert">{studentError}</p>}
-
-            {!studentPayload && !studentLoading && (
-              <p className="hint">Load the dashboard to view role paths, skill gaps, and courses.</p>
-            )}
-
+      {page === "student" && (
+        <section className="panel">
+          <h2>{studentOverview?.title || "Student Career Page"}</h2>
+          <p>{studentOverview?.description}</p>
+          <div className="card">
+            <label htmlFor="studentId">Student id</label>
+            <input id="studentId" value={studentUserId} onChange={(e) => setStudentUserId(e.target.value)} />
+            <button type="button" onClick={loadStudent} disabled={loading}>
+              Load Recommendations
+            </button>
+            {studentError && <p className="error">{studentError}</p>}
             {studentPayload && (
-              <div className="student-grid">
-                <article className="details-card">
-                  <h3>Recommended Role Paths</h3>
-                  <ul>
-                    {studentPayload.recommendations.map((item) => (
-                      <li key={item.role_path}>
-                        {item.role_path} - {toPercent(item.confidence)} confidence
-                      </li>
-                    ))}
-                  </ul>
-                </article>
-
-                <article className="details-card">
-                  <h3>Priority Skill Gaps</h3>
-                  <ul>
-                    {studentPayload.skill_gaps.map((gap) => (
-                      <li key={gap}>{gap}</li>
-                    ))}
-                  </ul>
-                </article>
-
-                <article className="details-card">
-                  <h3>Course Suggestions</h3>
-                  <ul>
-                    {studentPayload.courses.map((course) => (
-                      <li key={course.title}>
-                        <a href={course.url} target="_blank" rel="noreferrer">
-                          {course.title}
-                        </a>{" "}
-                        ({course.provider}, {course.duration}, {course.level})
-                      </li>
-                    ))}
-                  </ul>
-                </article>
+              <div className="result">
+                <h3>Role Paths</h3>
+                <ul>
+                  {studentPayload.recommendations.map((r) => (
+                    <li key={r.role_path}>
+                      {r.role_path} - {toPercent(r.confidence)}
+                    </li>
+                  ))}
+                </ul>
+                <h3>Skill Gaps</h3>
+                <ul>
+                  {studentPayload.skill_gaps.map((g) => (
+                    <li key={g}>{g}</li>
+                  ))}
+                </ul>
               </div>
             )}
-          </section>
-        )}
+          </div>
+        </section>
+      )}
 
-        {activeRole === "admin" && (
-          <section className="panel">
-            <h2>Governance Snapshot</h2>
-            <p className="hint">Phase 1 placeholder for policy and fairness controls.</p>
-            <div className="student-grid">
-              <article className="details-card">
-                <h3>Audit Coverage</h3>
-                <p>Target: 100% de-anonymization and score override events logged.</p>
-              </article>
-              <article className="details-card">
-                <h3>Fairness Gate</h3>
-                <p>DIR policy threshold: pass when ratio is 0.80 or greater.</p>
-              </article>
-              <article className="details-card">
-                <h3>API Contract</h3>
-                <p>Frontend uses only {API_BASE_URL} endpoints and no direct datastore access.</p>
-              </article>
-            </div>
-          </section>
-        )}
-      </main>
+      {page === "admin" && (
+        <section className="panel">
+          <h2>{adminOverview?.title || "Admin Governance Page"}</h2>
+          <p>{adminOverview?.description}</p>
+          <div className="card-grid">
+            <article className="card">
+              <h3>Governance Metrics</h3>
+              <p>Audit target: {adminOverview?.metrics.deanonymize_audit_target}</p>
+              <p>DIR threshold: {adminOverview?.metrics.fairness_dir_threshold}</p>
+            </article>
+            <article className="card">
+              <h3>PII Validation</h3>
+              <textarea value={adminValidationText} onChange={(e) => setAdminValidationText(e.target.value)} />
+              <button type="button" onClick={runAdminValidation} disabled={loading}>
+                Validate Privacy
+              </button>
+              {adminValidationResult && <p className="meta">{adminValidationResult}</p>}
+            </article>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

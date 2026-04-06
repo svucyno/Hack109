@@ -278,6 +278,7 @@ class CandidateAIEvaluationView(APIView):
         )
         cached = _get_cached_result(record, key, fingerprint)
         if cached:
+            cached['link_evidence'] = link_evidence
             return Response(cached, status=status.HTTP_200_OK)
 
         result = smart_evaluate_candidate(
@@ -325,6 +326,7 @@ class CandidateAIEvaluationView(APIView):
                     'links': parsed_profile.get('links', []),
                     'link_evidence': link_evidence,
                 },
+                'link_evidence': link_evidence,
                 'comparison': {
                     'fit_score': fit_score,
                     'fit_threshold_passed': pass_decision,

@@ -164,6 +164,16 @@ type CareerRecommendationPayload = {
   cache_hit?: boolean;
 };
 
+const DEFAULT_ADMIN_OVERVIEW: AdminOverview = {
+  role: "admin",
+  title: "Admin Governance Page",
+  description: "Audit coverage, fairness checks, and policy controls.",
+  metrics: {
+    deanonymize_audit_target: "100%",
+    fairness_dir_threshold: "0.80",
+  },
+};
+
 function toPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
@@ -717,6 +727,7 @@ function AdminPage(props: {
   setLoading: (value: boolean) => void;
 }) {
   const { adminOverview, loading, setLoading } = props;
+  const [liveAdminOverview, setLiveAdminOverview] = useState<AdminOverview>(adminOverview ?? DEFAULT_ADMIN_OVERVIEW);
   const [adminValidationText, setAdminValidationText] = useState("This profile has no private contact details.");
   const [adminValidationResult, setAdminValidationResult] = useState("");
   const [adminUsername, setAdminUsername] = useState("");
@@ -731,6 +742,39 @@ function AdminPage(props: {
   const authHeaders: Record<string, string> = adminToken
     ? { "X-Session-Token": adminToken }
     : {};
+
+  useEffect(() => {
+    if (!adminToken) {
+      setLiveAdminOverview(adminOverview ?? DEFAULT_ADMIN_OVERVIEW);
+      return;
+    }
+
+    let cancelled = false;
+    const loadAdminOverview = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/admin`, {
+          headers: { ...authHeaders },
+        });
+        if (!res.ok) {
+          return;
+        }
+        const payload = (await res.json()) as AdminOverview;
+        if (!cancelled) {
+          setLiveAdminOverview(payload);
+        }
+      } catch {
+        if (!cancelled) {
+          setLiveAdminOverview(adminOverview ?? DEFAULT_ADMIN_OVERVIEW);
+        }
+      }
+    };
+
+    void loadAdminOverview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [adminToken, adminOverview]);
 
   const loginAdmin = async () => {
     setLoading(true);
@@ -860,8 +904,8 @@ function AdminPage(props: {
 
   return (
     <section className="panel">
-      <h2>{adminOverview?.title || "Admin Governance Page"}</h2>
-      <p>{adminOverview?.description}</p>
+      <h2>{liveAdminOverview.title}</h2>
+      <p>{liveAdminOverview.description}</p>
 
       <div className="card-grid">
         <article className="card">
@@ -935,8 +979,8 @@ function AdminPage(props: {
       <div className="card-grid">
         <article className="card">
           <h3>Governance Metrics</h3>
-          <p>Audit target: {adminOverview?.metrics.deanonymize_audit_target}</p>
-          <p>DIR threshold: {adminOverview?.metrics.fairness_dir_threshold}</p>
+          <p>Audit target: {liveAdminOverview.metrics.deanonymize_audit_target}</p>
+          <p>DIR threshold: {liveAdminOverview.metrics.fairness_dir_threshold}</p>
         </article>
         <article className="card">
           <h3>PII Validation</h3>
@@ -952,13 +996,33 @@ function AdminPage(props: {
 }
 
 function App() {
-
   const [hrOverview, setHrOverview] = useState<HrOverview | null>(null);
   const [studentOverview, setStudentOverview] = useState<StudentOverview | null>(null);
   const [adminOverview] = useState<AdminOverview | null>(null);
   const [overviewError, setOverviewError] = useState("");
 
   const [loading, setLoading] = useState(false);
+
+  const portalHighlights = useMemo(
+    () => [
+      {
+        label: "HR candidates",
+        value: String(hrOverview?.candidate_refs?.length ?? 0),
+        note: "candidate references ready",
+      },
+      {
+        label: "Student path",
+        value: studentOverview ? "Live" : "Loading",
+        note: "AI guidance and roadmap",
+      },
+      {
+        label: "Admin access",
+        value: "Protected",
+        note: "session token required",
+      },
+    ],
+    [hrOverview, studentOverview],
+  );
 
   useEffect(() => {
     const loadOverviews = async () => {
@@ -989,9 +1053,21 @@ function App() {
     <BrowserRouter>
       <div className="shell">
         <header className="masthead">
-          <p className="tag">GetHired v2</p>
-          <h1>Role-Specific Portal</h1>
-          <p>Three dedicated frontend pages with AI-backed candidate and student growth analysis.</p>
+          <div className="masthead-copy">
+            <p className="tag">GetHired v2</p>
+            <h1>Role-Specific Portal</h1>
+            <p className="masthead-lead">A sharper workspace for recruiter scoring, student career planning, and admin governance workflows.</p>
+          </div>
+
+          <div className="hero-grid" aria-label="portal highlights">
+            {portalHighlights.map((item) => (
+              <article className="hero-card" key={item.label}>
+                <p className="hero-label">{item.label}</p>
+                <p className="hero-value">{item.value}</p>
+                <p className="hero-note">{item.note}</p>
+              </article>
+            ))}
+          </div>
         </header>
 
         <nav className="role-nav" aria-label="role navigation">

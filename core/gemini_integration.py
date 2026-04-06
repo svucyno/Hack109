@@ -59,6 +59,7 @@ def evaluate_candidate_fit(
     roles: list[str],
     job_description: str,
     required_skills: list[str],
+    link_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Use Gemini AI to evaluate candidate fit for a job role.
@@ -84,6 +85,8 @@ def evaluate_candidate_fit(
         if not client:
             return {'status': 'error', 'message': 'Failed to initialize Gemini client'}
 
+        link_evidence = link_evidence or {}
+
         prompt = f"""
 You are an expert recruitment analyst evaluating a candidate for a software engineering role.
 
@@ -97,8 +100,18 @@ Job Role Requirements:
 
 Required Skills for Role: {', '.join(required_skills)}
 
+Verified Public Link Evidence (supporting signal):
+- total_links: {link_evidence.get('total_links', 0)}
+- verified_total: {link_evidence.get('verified_total', 0)}
+- reachable_total: {link_evidence.get('reachable_total', 0)}
+- github_profiles: {link_evidence.get('github_profiles', 0)}
+- github_repositories: {link_evidence.get('github_repositories', 0)}
+- production_links: {link_evidence.get('production_links', 0)}
+- reachable_urls: {', '.join(link_evidence.get('reachable_urls', [])) or 'None'}
+
 Please provide:
 1. A fit score (0-100) based on skill alignment and role experience.
+    Include verified link evidence as a secondary confidence signal, not the primary signal.
 2. Key strengths of the candidate for this role.
 3. Skill gaps that should be addressed.
 4. Specific recommendations for the candidate to improve fit.

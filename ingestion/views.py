@@ -142,6 +142,7 @@ EDUCATION_KEYWORDS = [
 URL_RE = re.compile(r'(?i)\b(?:https?://|www\.)[^\s<>()]+')
 HREF_URL_RE = re.compile(r'(?i)href\s*=\s*[\"\']([^\"\']+)[\"\']')
 MARKDOWN_URL_RE = re.compile(r'\[[^\]]+\]\(([^)]+)\)')
+PROFILE_URL_HINTS = ('github.com/', 'linkedin.com/', 'gitlab.com/', 'bitbucket.org/')
 GITHUB_HINT = 'github.com/'
 NON_PROD_HOST_BLOCKLIST = {
     'linkedin.com',
@@ -173,6 +174,27 @@ def _unsupported_file_detail(filename: str) -> str:
 
 
 def _extract_text(content: bytes) -> str:
+    def _extract_docx_hyperlink_targets(document) -> list[str]:
+        links: list[str] = []
+        seen: set[str] = set()
+        try:
+            relationships = getattr(document.part, 'rels', {})
+            for rel in relationships.values():
+                reltype = str(getattr(rel, 'reltype', ''))
+                if not reltype.endswith('/hyperlink'):
+                    continue
+                target = str(getattr(rel, 'target_ref', '') or '').strip()
+                if not target:
+                    continue
+                key = target.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                links.append(target)
+        except Exception:
+            return []
+        return links
+
     def _repair_unicode(value: str) -> str:
         repaired = value.replace('\u00a0', ' ')
         replacements = {
@@ -238,6 +260,10 @@ def _extract_text(content: bytes) -> str:
                         cell_text = cell.text.strip()
                         if cell_text:
                             lines.append(cell_text)
+
+            # Include embedded hyperlink targets that may not appear in plain paragraph text.
+            lines.extend(_extract_docx_hyperlink_targets(document))
+
             extracted = _normalize('\n'.join(lines).strip())
             if extracted:
                 return extracted

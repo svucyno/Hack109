@@ -38,6 +38,7 @@ def _rule_based_evaluation(
     extracted_skills: list[str],
     roles: list[str],
     required_skills: list[str],
+    link_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Fallback rule-based evaluation when AI providers are unavailable.
@@ -49,10 +50,24 @@ def _rule_based_evaluation(
     fit_score = 0
     if required_skills:
         fit_score = round(100 * len(matched) / len(required_skills))
+
+    link_bonus = 0
+    if link_evidence:
+        reachable_total = int(link_evidence.get('reachable_total', 0) or 0)
+        github_repositories = int(link_evidence.get('github_repositories', 0) or 0)
+        production_links = int(link_evidence.get('production_links', 0) or 0)
+        # Use links as a supporting signal rather than a dominant one.
+        link_bonus += min(6, reachable_total * 2)
+        link_bonus += min(2, github_repositories)
+        link_bonus += min(2, production_links)
+
+    fit_score = min(100, fit_score + link_bonus)
     
     strengths = [
         f"Has {skill} experience" for skill in matched[:3]
     ] or ["Demonstrates willingness to learn"]
+    if link_bonus > 0:
+        strengths.append('Has verified public project/profile links that support evidence of work')
     
     gaps = [
         f"Missing: {skill}" for skill in missing[:3]
@@ -71,7 +86,10 @@ def _rule_based_evaluation(
         'gaps': gaps,
         'recommendations': recommendations,
         'confidence': 'high' if fit_score >= 80 else 'medium' if fit_score >= 50 else 'low',
-        'reasoning': f"Rule-based evaluation: {len(matched)}/{len(required_skills)} skills matched",
+        'reasoning': (
+            f"Rule-based evaluation: {len(matched)}/{len(required_skills)} skills matched"
+            f"; link evidence bonus={link_bonus}"
+        ),
     }
 
 
@@ -81,6 +99,7 @@ def smart_evaluate_candidate(
     roles: list[str],
     job_description: str,
     required_skills: list[str],
+    link_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Smart AI inference with fallback chain:
@@ -100,6 +119,7 @@ def smart_evaluate_candidate(
             roles=roles,
             job_description=job_description,
             required_skills=required_skills,
+            link_evidence=link_evidence,
         )
         if result.get('status') == 'success':
             return {
@@ -117,6 +137,7 @@ def smart_evaluate_candidate(
             roles=roles,
             job_description=job_description,
             required_skills=required_skills,
+            link_evidence=link_evidence,
         )
         if result.get('status') == 'success':
             return {
@@ -132,6 +153,7 @@ def smart_evaluate_candidate(
         extracted_skills=extracted_skills,
         roles=roles,
         required_skills=required_skills,
+        link_evidence=link_evidence,
     )
 
     return {

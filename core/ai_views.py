@@ -5,6 +5,7 @@ Routes between Gemini, OpenRouter, and rule-based evaluation.
 
 import hashlib
 import json
+from datetime import datetime, timedelta
 
 from django.utils import timezone
 from rest_framework import status
@@ -90,6 +91,80 @@ def _parse_csv_list(raw_value) -> list[str]:
     return [part.strip() for part in str(raw_value).split(',') if part.strip()]
 
 
+LINK_VERIFICATION_TTL_HOURS = 24
+
+
+def _parse_verified_at(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+        return parsed
+    except Exception:
+        return None
+
+
+def _refresh_verified_links_if_needed(record: ResumeUploadRecord, parsed_profile: dict) -> dict:
+    links = [str(item).strip() for item in (parsed_profile.get('links') or []) if str(item).strip()]
+    verified_links = [item for item in (parsed_profile.get('verified_links') or []) if isinstance(item, dict)]
+
+    if not links:
+        return parsed_profile
+
+    now = timezone.now()
+    has_stale_entries = any(
+        (
+            (verified_at := _parse_verified_at(str(entry.get('verified_at', '')))) is None
+            or (now - verified_at) > timedelta(hours=LINK_VERIFICATION_TTL_HOURS)
+        )
+        for entry in verified_links
+    )
+    needs_refresh = (not verified_links) or has_stale_entries
+    if not needs_refresh:
+        return parsed_profile
+
+    from ingestion.views import _verify_links
+
+    refreshed = _verify_links(links)
+
+    parsed_json = dict(record.parsed_json or {})
+    structured_profile = dict(parsed_json.get('structured_profile') or {})
+    parse_meta = dict(parsed_json.get('parse_meta') or {})
+
+    structured_profile['links'] = links
+    structured_profile['verified_links'] = refreshed
+    parse_meta['verified_links_count'] = len(refreshed)
+
+    parsed_json['structured_profile'] = structured_profile
+    parsed_json['parse_meta'] = parse_meta
+    record.parsed_json = parsed_json
+    record.save(update_fields=['parsed_json', 'updated_at'])
+
+    return structured_profile
+
+
+def _build_link_evidence(parsed_profile: dict) -> dict:
+    links = [str(item).strip() for item in (parsed_profile.get('links') or []) if str(item).strip()]
+    verified_links = [item for item in (parsed_profile.get('verified_links') or []) if isinstance(item, dict)]
+
+    reachable = [item for item in verified_links if bool(item.get('reachable'))]
+    unreachable = [item for item in verified_links if not bool(item.get('reachable'))]
+    github_profiles = [item for item in reachable if item.get('type') == 'github_profile']
+    github_repositories = [item for item in reachable if item.get('type') == 'github_repository']
+    production_links = [item for item in reachable if item.get('type') == 'production_link']
+
+    return {
+        'total_links': len(links),
+        'verified_total': len(verified_links),
+        'reachable_total': len(reachable),
+        'unreachable_total': len(unreachable),
+        'github_profiles': len(github_profiles),
+        'github_repositories': len(github_repositories),
+        'production_links': len(production_links),
+        'reachable_urls': [str(item.get('url', '')) for item in reachable[:8]],
+    }
+
+
 class GeminiStatusView(APIView):
     """Check if AI providers are enabled and ready."""
     permission_classes = [AllowAny]
@@ -145,6 +220,8 @@ class CandidateAIEvaluationView(APIView):
             )
 
         parsed_profile = record.parsed_json.get('structured_profile', {})
+        parsed_profile = _refresh_verified_links_if_needed(record, parsed_profile)
+        link_evidence = _build_link_evidence(parsed_profile)
         extracted_skills = parsed_profile.get('skills', [])
         roles = parsed_profile.get('roles', [])
 
@@ -209,6 +286,7 @@ class CandidateAIEvaluationView(APIView):
             roles=roles,
             job_description=job_description,
             required_skills=required_skills,
+            link_evidence=link_evidence,
         )
 
         if result.get('status') == 'success':
@@ -244,6 +322,8 @@ class CandidateAIEvaluationView(APIView):
                     'skills': extracted_skills,
                     'roles': roles,
                     'years_experience': parsed_profile.get('years_experience'),
+                    'links': parsed_profile.get('links', []),
+                    'link_evidence': link_evidence,
                 },
                 'comparison': {
                     'fit_score': fit_score,

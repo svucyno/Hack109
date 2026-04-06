@@ -37,6 +37,7 @@ def evaluate_candidate_fit(
     roles: list[str],
     job_description: str,
     required_skills: list[str],
+    link_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Use OpenRouter AI to evaluate candidate fit for a job role.
@@ -48,6 +49,8 @@ def evaluate_candidate_fit(
         }
 
     try:
+        link_evidence = link_evidence or {}
+
         prompt = f"""
 You are an expert recruitment analyst evaluating a candidate for a software engineering role.
 
@@ -61,8 +64,18 @@ Job Role Requirements:
 
 Required Skills for Role: {', '.join(required_skills)}
 
+Verified Public Link Evidence (supporting signal):
+- total_links: {link_evidence.get('total_links', 0)}
+- verified_total: {link_evidence.get('verified_total', 0)}
+- reachable_total: {link_evidence.get('reachable_total', 0)}
+- github_profiles: {link_evidence.get('github_profiles', 0)}
+- github_repositories: {link_evidence.get('github_repositories', 0)}
+- production_links: {link_evidence.get('production_links', 0)}
+- reachable_urls: {', '.join(link_evidence.get('reachable_urls', [])) or 'None'}
+
 Please provide a JSON response with:
 1. fit_score (0-100)
+    Use verified link evidence as secondary confidence signal, not as primary scoring factor.
 2. strengths (list of 2-3 strengths)
 3. gaps (list of 2-3 skill gaps)
 4. recommendations (list of 2-3 recommendations)

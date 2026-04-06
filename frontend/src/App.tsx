@@ -73,6 +73,16 @@ type AdminRecordDetailResponse = {
   parsed_json: Record<string, unknown>;
 };
 
+type VerifiedLink = {
+  url: string;
+  domain?: string;
+  type?: string;
+  reachable?: boolean;
+  status_code?: number | null;
+  verified_at?: string;
+  error?: string;
+};
+
 type CandidateScore = {
   reference_no: string;
   score_normalized: number;
@@ -126,6 +136,8 @@ type ParsePayload = {
     skills: string[];
     roles: string[];
     years_experience: number | null;
+    links?: string[];
+    verified_links?: VerifiedLink[];
     job_relevant_skills?: {
       matched: string[];
       missing: string[];
@@ -176,6 +188,86 @@ const DEFAULT_ADMIN_OVERVIEW: AdminOverview = {
 
 function toPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+function normalizeLinks(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeVerifiedLinks(value: unknown): VerifiedLink[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((item): item is VerifiedLink => Boolean(item) && typeof item === "object" && "url" in item)
+    .map((item) => ({
+      url: String(item.url || "").trim(),
+      domain: typeof item.domain === "string" ? item.domain : undefined,
+      type: typeof item.type === "string" ? item.type : undefined,
+      reachable: typeof item.reachable === "boolean" ? item.reachable : undefined,
+      status_code: typeof item.status_code === "number" ? item.status_code : null,
+      verified_at: typeof item.verified_at === "string" ? item.verified_at : undefined,
+      error: typeof item.error === "string" ? item.error : undefined,
+    }))
+    .filter((item) => Boolean(item.url));
+}
+
+function extractLinksFromParsedJson(parsedJson: unknown): { links: string[]; verifiedLinks: VerifiedLink[] } {
+  if (!parsedJson || typeof parsedJson !== "object") {
+    return { links: [], verifiedLinks: [] };
+  }
+
+  const structuredProfile = (parsedJson as { structured_profile?: Record<string, unknown> }).structured_profile;
+  if (!structuredProfile || typeof structuredProfile !== "object") {
+    return { links: [], verifiedLinks: [] };
+  }
+
+  return {
+    links: normalizeLinks(structuredProfile.links),
+    verifiedLinks: normalizeVerifiedLinks(structuredProfile.verified_links),
+  };
+}
+
+function LinkList(props: { links: string[]; verifiedLinks?: VerifiedLink[] }) {
+  const { links, verifiedLinks = [] } = props;
+  const verifiedMap = new Map(verifiedLinks.map((item) => [item.url, item] as const));
+
+  if (!links.length) {
+    return <p className="meta">No resume links were extracted.</p>;
+  }
+
+  return (
+    <div className="link-list">
+      {links.map((link) => {
+        const verified = verifiedMap.get(link);
+        const reachable = verified?.reachable;
+        const linkType = verified?.type || "link";
+
+        return (
+          <a
+            key={link}
+            className={`link-pill${reachable === false ? " is-unreachable" : ""}`}
+            href={link}
+            target="_blank"
+            rel="noreferrer"
+            title={verified?.error || link}
+          >
+            <span className="link-pill-title">{linkType}</span>
+            <span className="link-pill-url">{link}</span>
+            <span className="link-pill-status">{reachable === false ? "Unreachable" : "Open link"}</span>
+          </a>
+        );
+      })}
+    </div>
+  );
 }
 
 async function uploadAndParseResume(file: File) {
@@ -279,6 +371,7 @@ function HrPage(props: {
   const [requiredExperienceYears, setRequiredExperienceYears] = useState("2");
   const [minFitScore, setMinFitScore] = useState("70");
   const [otherParams, setOtherParams] = useState("Strong API design, deployment familiarity, ownership mindset");
+  const parsedLinks = useMemo(() => extractLinksFromParsedJson(parsePayload), [parsePayload]);
 
   const fetchScore = async () => {
     setLoading(true);
@@ -424,6 +517,8 @@ function HrPage(props: {
               <p>
                 Storage: {parsePayload.parse_meta.storage_backend} ({parsePayload.parse_meta.storage_key})
               </p>
+              <p className="meta">Resume links</p>
+              <LinkList links={parsedLinks.links} verifiedLinks={parsedLinks.verifiedLinks} />
             </div>
           )}
         </article>
@@ -738,6 +833,7 @@ function AdminPage(props: {
   const [selectedRef, setSelectedRef] = useState("");
   const [recordDetail, setRecordDetail] = useState<AdminRecordDetailResponse | null>(null);
   const [recordsError, setRecordsError] = useState("");
+  const recordLinks = useMemo(() => extractLinksFromParsedJson(recordDetail?.parsed_json), [recordDetail]);
 
   const authHeaders: Record<string, string> = adminToken
     ? { "X-Session-Token": adminToken }
@@ -971,6 +1067,8 @@ function AdminPage(props: {
             <p>
               <strong>Status:</strong> {recordDetail.status}
             </p>
+            <p className="meta">Resume links</p>
+            <LinkList links={recordLinks.links} verifiedLinks={recordLinks.verifiedLinks} />
             <pre className="json-view">{JSON.stringify(recordDetail.parsed_json, null, 2)}</pre>
           </div>
         </article>

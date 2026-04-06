@@ -42,7 +42,7 @@ class StudentOverviewView(APIView):
 
 
 class AdminOverviewView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminUser]
 
     def get(self, request):
         return Response(

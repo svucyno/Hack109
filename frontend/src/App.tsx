@@ -650,6 +650,7 @@ function StudentPage(props: {
   const [roleAnalysis, setRoleAnalysis] = useState<AiRoleAnalysisPayload | null>(null);
   const [roleSkills, setRoleSkills] = useState<RoleSkillView[]>([]);
   const [careerPlan, setCareerPlan] = useState<CareerRecommendationPayload | null>(null);
+  const parsedLinks = useMemo(() => extractLinksFromParsedJson(parsePayload), [parsePayload]);
 
   const uniqueMissingSkills = useMemo(() => {
     const bag = new Set<string>();
@@ -768,6 +769,14 @@ function StudentPage(props: {
           )}
         </article>
       </div>
+
+      {parsePayload && (
+        <article className="card">
+          <h3>Resume Links</h3>
+          <p className="meta">Links loaded from the parsed record in the database.</p>
+          <LinkList links={parsedLinks.links} verifiedLinks={parsedLinks.verifiedLinks} />
+        </article>
+      )}
 
       <div className="card-grid">
         <article className="card">
@@ -1067,10 +1076,16 @@ function AdminPage(props: {
             <p>
               <strong>Status:</strong> {recordDetail.status}
             </p>
-            <p className="meta">Resume links</p>
-            <LinkList links={recordLinks.links} verifiedLinks={recordLinks.verifiedLinks} />
             <pre className="json-view">{JSON.stringify(recordDetail.parsed_json, null, 2)}</pre>
           </div>
+        </article>
+      )}
+
+      {recordDetail && (
+        <article className="card">
+          <h3>Resume Links</h3>
+          <p className="meta">Links loaded from the saved record in the database.</p>
+          <LinkList links={recordLinks.links} verifiedLinks={recordLinks.verifiedLinks} />
         </article>
       )}
 

@@ -831,12 +831,17 @@ function AdminPage(props: {
   };
 
   const runAdminValidation = async () => {
+    if (!adminToken) {
+      setAdminValidationResult("Login as admin first.");
+      return;
+    }
+
     setLoading(true);
     setAdminValidationResult("");
     try {
       const res = await fetch(`${API_BASE_URL}/privacy/validate`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ text: adminValidationText }),
       });
 
@@ -950,7 +955,7 @@ function App() {
 
   const [hrOverview, setHrOverview] = useState<HrOverview | null>(null);
   const [studentOverview, setStudentOverview] = useState<StudentOverview | null>(null);
-  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
+  const [adminOverview] = useState<AdminOverview | null>(null);
   const [overviewError, setOverviewError] = useState("");
 
   const [loading, setLoading] = useState(false);
@@ -959,22 +964,19 @@ function App() {
     const loadOverviews = async () => {
       setOverviewError("");
       try {
-        const [hrRes, studentRes, adminRes] = await Promise.all([
+        const [hrRes, studentRes] = await Promise.all([
           fetch(`${API_BASE_URL}/hr`),
           fetch(`${API_BASE_URL}/student`),
-          fetch(`${API_BASE_URL}/admin`),
         ]);
-        if (!hrRes.ok || !studentRes.ok || !adminRes.ok) {
+        if (!hrRes.ok || !studentRes.ok) {
           throw new Error("overview endpoints unavailable");
         }
 
         const hrData = (await hrRes.json()) as HrOverview;
         const studentData = (await studentRes.json()) as StudentOverview;
-        const adminData = (await adminRes.json()) as AdminOverview;
 
         setHrOverview(hrData);
         setStudentOverview(studentData);
-        setAdminOverview(adminData);
       } catch {
         setOverviewError("Failed to load role pages from backend endpoints.");
       }

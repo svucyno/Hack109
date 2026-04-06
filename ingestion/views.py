@@ -2,6 +2,9 @@ import re
 import uuid
 from io import BytesIO
 from datetime import datetime
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from django.utils import timezone
 
 from rest_framework import status
@@ -136,6 +139,26 @@ EDUCATION_KEYWORDS = [
     'university',
     'college',
 ]
+URL_RE = re.compile(r'(?i)\b(?:https?://|www\.)[^\s<>()]+')
+HREF_URL_RE = re.compile(r'(?i)href\s*=\s*[\"\']([^\"\']+)[\"\']')
+MARKDOWN_URL_RE = re.compile(r'\[[^\]]+\]\(([^)]+)\)')
+GITHUB_HINT = 'github.com/'
+NON_PROD_HOST_BLOCKLIST = {
+    'linkedin.com',
+    'gitlab.com',
+    'bitbucket.org',
+    'leetcode.com',
+    'hackerrank.com',
+    'behance.net',
+    'dribbble.com',
+    'medium.com',
+    'twitter.com',
+    'x.com',
+    'facebook.com',
+    'instagram.com',
+}
+MAX_LINKS_TO_VERIFY = 8
+URL_VERIFY_TIMEOUT_SECONDS = 4
 
 
 def _valid_resume_filename(filename: str) -> bool:
@@ -500,6 +523,143 @@ def _infer_years_experience(text: str) -> int | None:
     return None
 
 
+def _strip_url_trailing_punctuation(url: str) -> str:
+    return url.rstrip('.,;:!?)]}\'\"')
+
+
+def _extract_links(text: str) -> list[str]:
+    links: list[str] = []
+    seen: set[str] = set()
+
+    def _add(candidate: str) -> None:
+        raw = _strip_url_trailing_punctuation(candidate.strip())
+        if not raw:
+            return
+        lowered = raw.lower()
+        normalized = raw
+
+        if lowered.startswith('www.') or any(lowered.startswith(hint) for hint in PROFILE_URL_HINTS):
+            normalized = f'https://{raw}'
+
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+            return
+        if not _is_allowed_resume_link(normalized):
+            return
+
+        dedupe_key = normalized.lower()
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        links.append(normalized)
+
+    for match in URL_RE.findall(text):
+        _add(match)
+
+    for href_url in HREF_URL_RE.findall(text):
+        _add(href_url)
+
+    for embedded_url in MARKDOWN_URL_RE.findall(text):
+        _add(embedded_url)
+
+    lowered = text.lower()
+    start = 0
+    while True:
+        idx = lowered.find(GITHUB_HINT, start)
+        if idx == -1:
+            break
+        end = idx
+        while end < len(text) and not text[end].isspace():
+            end += 1
+        _add(text[idx:end])
+        start = end
+
+    return links[:20]
+
+
+def _is_allowed_resume_link(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    if host.startswith('www.'):
+        host = host[4:]
+
+    if not host or host in {'localhost', '127.0.0.1'}:
+        return False
+
+    if host == 'github.com' or host.endswith('.github.com'):
+        return True
+
+    if host in NON_PROD_HOST_BLOCKLIST:
+        return False
+
+    # Treat non-blocklisted public domains as production/portfolio links.
+    return '.' in host
+
+
+def _classify_link(url: str) -> str:
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path_parts = [part for part in parsed.path.split('/') if part]
+
+    if 'github.com' in host:
+        if len(path_parts) == 1:
+            return 'github_profile'
+        if len(path_parts) >= 2:
+            return 'github_repository'
+        return 'github'
+    return 'production_link'
+
+
+def _verify_single_link(url: str) -> dict:
+    parsed = urlparse(url)
+    result = {
+        'url': url,
+        'domain': parsed.netloc.lower(),
+        'type': _classify_link(url),
+        'reachable': False,
+        'status_code': None,
+        'verified_at': timezone.now().isoformat(),
+        'error': '',
+    }
+
+    if parsed.scheme not in {'http', 'https'} or not parsed.netloc:
+        result['error'] = 'Invalid URL format'
+        return result
+
+    headers = {'User-Agent': 'GetHired-LinkVerifier/1.0'}
+    methods = ['HEAD', 'GET']
+    for method in methods:
+        try:
+            request = Request(url, headers=headers, method=method)
+            with urlopen(request, timeout=URL_VERIFY_TIMEOUT_SECONDS) as response:
+                code = int(getattr(response, 'status', 0) or 0)
+                result['status_code'] = code
+                result['reachable'] = 200 <= code < 400
+                result['error'] = '' if result['reachable'] else f'HTTP {code}'
+                return result
+        except HTTPError as exc:
+            code = int(exc.code)
+            result['status_code'] = code
+            result['reachable'] = 200 <= code < 400
+            result['error'] = '' if result['reachable'] else f'HTTP {code}'
+            if method == 'GET' or code in {401, 403, 404, 410}:
+                return result
+        except URLError as exc:
+            result['error'] = str(getattr(exc, 'reason', exc))
+            if method == 'GET':
+                return result
+        except Exception as exc:
+            result['error'] = str(exc)
+            if method == 'GET':
+                return result
+
+    return result
+
+
+def _verify_links(urls: list[str]) -> list[dict]:
+    return [_verify_single_link(url) for url in urls[:MAX_LINKS_TO_VERIFY]]
+
+
 def _build_parsed_payload(reference_no: str, text: str, storage_backend: str, storage_key: str) -> dict:
     skills = _infer_skills(text)
     roles = _infer_roles(text)
@@ -507,6 +667,8 @@ def _build_parsed_payload(reference_no: str, text: str, storage_backend: str, st
     projects = _infer_projects(text)
     education = _infer_education(text)
     years = _infer_years_experience(text)
+    links = _extract_links(text)
+    verified_links = _verify_links(links)
 
     return {
         'reference_no': reference_no,
@@ -517,12 +679,15 @@ def _build_parsed_payload(reference_no: str, text: str, storage_backend: str, st
             'years_experience': years,
             'projects': projects,
             'education': education,
+            'links': links,
+            'verified_links': verified_links,
         },
         'parse_meta': {
             'source': 'phase2-light-parser',
             'ocr_fallback_used': 'ocr fallback scheduled' in text.lower(),
             'storage_backend': storage_backend,
             'storage_key': storage_key,
+            'verified_links_count': len(verified_links),
         },
     }
 

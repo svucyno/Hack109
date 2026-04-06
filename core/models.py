@@ -9,9 +9,30 @@ Only Reintegration Service can resolve Reference_No to User_ID.
 """
 
 import uuid
+import logging
 from django.db import models
 from django.contrib.auth.models import User
-from pgvector.django import VectorField
+
+logger = logging.getLogger(__name__)
+
+try:
+    from pgvector.django import VectorField
+except Exception as exc:
+    class VectorField(models.JSONField):
+        """
+        Compatibility fallback when pgvector (or numpy dependency) is unavailable.
+        Stores vectors as JSON arrays so the app can run in restricted environments.
+        """
+
+        def __init__(self, *args, dimensions=None, **kwargs):
+            self.dimensions = dimensions
+            super().__init__(*args, **kwargs)
+
+    logger.warning(
+        "pgvector unavailable; using JSON fallback for VectorField. "
+        "Vector index/search features may be degraded. Error: %s",
+        exc,
+    )
 
 
 class PrimaryProfile(models.Model):

@@ -3,7 +3,7 @@ import uuid
 
 from django.conf import settings
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -42,7 +42,7 @@ def _redact_text(text: str) -> tuple[str, list[dict]]:
 
 
 class PrivacyRedactView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminUser]
 
     def post(self, request):
         text = str(request.data.get('text', '')).strip()
@@ -81,7 +81,7 @@ class PrivacyRedactView(APIView):
 
 
 class PrivacyReportView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminUser]
 
     def get(self, request, reference_no: str):
         report = REPORT_STORE.get(reference_no)
@@ -97,7 +97,7 @@ class PrivacyReportView(APIView):
 
 
 class PrivacyValidateView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAdminUser]
 
     def post(self, request):
         text = str(request.data.get('text', '')).strip()
